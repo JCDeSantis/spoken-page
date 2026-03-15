@@ -907,7 +907,8 @@ img {
   margin-top: 0;
 }
 
-.player-panel-fullscreen {
+.player-panel-fullscreen,
+.player-panel-inline-fullscreen {
   min-height: 100vh;
   width: 100%;
   padding: 2rem;
@@ -915,29 +916,42 @@ img {
   background: var(--fullscreen-bg);
 }
 
+.player-panel-inline-fullscreen {
+  min-height: 100%;
+  border-radius: 0;
+}
+
 .player-panel-fullscreen .subtitle-stage,
-.player-panel-fullscreen .transport {
+.player-panel-fullscreen .transport,
+.player-panel-inline-fullscreen .subtitle-stage,
+.player-panel-inline-fullscreen .transport {
   width: min(980px, 100%);
   justify-self: center;
 }
 
-.player-panel-fullscreen .subtitle-stage {
+.player-panel-fullscreen .subtitle-stage,
+.player-panel-inline-fullscreen .subtitle-stage {
   margin-top: 0;
 }
 
-.player-panel-fullscreen .subtitle-card {
+.player-panel-fullscreen .subtitle-card,
+.player-panel-inline-fullscreen .subtitle-card {
   min-height: min(56vh, 520px);
   align-content: center;
 }
 
-.player-panel-fullscreen .subtitle-active {
+.player-panel-fullscreen .subtitle-active,
+.player-panel-inline-fullscreen .subtitle-active {
   font-size: clamp(1.8rem, 3.8vw, 3.2rem);
   text-align: center;
 }
 
 .player-panel-fullscreen .subtitle-ghost,
 .player-panel-fullscreen .subtitle-header,
-.player-panel-fullscreen .subtitle-status {
+.player-panel-fullscreen .subtitle-status,
+.player-panel-inline-fullscreen .subtitle-ghost,
+.player-panel-inline-fullscreen .subtitle-header,
+.player-panel-inline-fullscreen .subtitle-status {
   text-align: center;
 }
 
@@ -1329,6 +1343,20 @@ img {
   transform: translateX(-50%);
 }
 
+.player-subsection-panel.player-subsection-panel-fullscreen {
+  inset: 0;
+  left: 0;
+  bottom: 0;
+  top: 0;
+  z-index: 40;
+  width: 100vw;
+  max-height: 100vh;
+  padding: 1.25rem;
+  border-radius: 0;
+  background: var(--fullscreen-bg);
+  transform: none;
+}
+
 .player-subsection-body {
   overflow: auto;
   display: grid;
@@ -1336,6 +1364,10 @@ img {
   min-height: 0;
   padding-right: 0.15rem;
   scrollbar-color: var(--signal) rgba(255, 255, 255, 0.08);
+}
+
+.player-subsection-panel.player-subsection-panel-fullscreen .player-subsection-body {
+  padding-right: 0;
 }
 
 .player-subsection-body::-webkit-scrollbar {
@@ -1434,8 +1466,13 @@ img {
     transform: none;
   }
 
-  .player-panel-fullscreen {
+  .player-panel-fullscreen,
+  .player-panel-inline-fullscreen {
     padding: 1.25rem;
+  }
+
+  .player-subsection-panel.player-subsection-panel-fullscreen {
+    padding: 1rem;
   }
 }
 

@@ -15,6 +15,7 @@ type PlayerPanelProps = {
   onItemRefresh: (itemId: string) => Promise<LibraryItemExpanded | null>;
   focusMode?: boolean;
   onHide?: (() => void) | null;
+  onInlineFullscreenChange?: ((isActive: boolean) => void) | null;
   openToken?: number;
   variant?: "full" | "dock";
 };
@@ -24,6 +25,15 @@ type TrackLoadRequest = {
   autoplay: boolean;
   time: number;
   track: AudioTrack;
+};
+
+type FullscreenDocument = Document & {
+  webkitExitFullscreen?: () => Promise<void> | void;
+  webkitFullscreenElement?: Element | null;
+};
+
+type FullscreenPanelElement = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void;
 };
 
 const AUTO_SYNC_INTERVAL_MS = 20000;
@@ -250,6 +260,7 @@ export function PlayerPanel({
   onItemRefresh,
   focusMode = false,
   onHide = null,
+  onInlineFullscreenChange = null,
   openToken = 0,
   variant = "full",
 }: PlayerPanelProps) {
@@ -288,7 +299,8 @@ export function PlayerPanel({
   const [subtitleOffset, setSubtitleOffset] = useState(0);
   const [selectedServerSubtitleId, setSelectedServerSubtitleId] = useState("");
   const [hasPlaybackStarted, setHasPlaybackStarted] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
+  const [isInlineFullscreen, setIsInlineFullscreen] = useState(false);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
 
   const serverSubtitleFiles = useMemo(() => listSubtitleFiles(item), [item]);
@@ -309,6 +321,7 @@ export function PlayerPanel({
   const progressValue = totalDuration > 0 ? Math.min(currentTime / totalDuration, 1) : 0;
   const isDock = variant === "dock";
   const hasLoadedSubtitles = subtitleCues.length > 0;
+  const isFullscreen = isBrowserFullscreen || isInlineFullscreen;
   const shouldShowLyricsStage = !isDock || focusMode || isFullscreen || hasPlaybackStarted;
   const chapterLabel = useMemo(() => formatChapterLabel(activeChapter?.title), [activeChapter?.title]);
 
@@ -342,15 +355,43 @@ export function PlayerPanel({
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(document.fullscreenElement === panelRef.current);
+      const fullscreenDocument = document as FullscreenDocument;
+      const fullscreenElement = document.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement ?? null;
+      setIsBrowserFullscreen(fullscreenElement === panelRef.current);
     };
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange as EventListener);
 
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange as EventListener);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isInlineFullscreen) {
+      return;
+    }
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousRootOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousRootOverflow;
+    };
+  }, [isInlineFullscreen]);
+
+  useEffect(() => {
+    onInlineFullscreenChange?.(isInlineFullscreen);
+
+    return () => {
+      onInlineFullscreenChange?.(false);
+    };
+  }, [isInlineFullscreen, onInlineFullscreenChange]);
 
   const pauseListeningClock = useEventCallback(() => {
     if (listenWindowStartRef.current !== null) {
@@ -378,6 +419,41 @@ export function PlayerPanel({
   const resetListeningClock = useEventCallback(() => {
     listenedSecondsRef.current = 0;
     listenWindowStartRef.current = isPlayingRef.current ? performance.now() : null;
+  });
+
+  const exitFullscreenSafely = useEventCallback(async (target?: Element | null) => {
+    const activeTarget = target ?? panelRef.current;
+    const fullscreenDocument = document as FullscreenDocument;
+    const fullscreenElement = document.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement ?? null;
+
+    if (isInlineFullscreen && activeTarget === panelRef.current) {
+      setIsInlineFullscreen(false);
+      return;
+    }
+
+    if (
+      !activeTarget ||
+      fullscreenElement !== activeTarget ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus() ||
+      (typeof document.exitFullscreen !== "function" &&
+        typeof fullscreenDocument.webkitExitFullscreen !== "function")
+    ) {
+      return;
+    }
+
+    try {
+      if (typeof document.exitFullscreen === "function") {
+        await document.exitFullscreen();
+        return;
+      }
+
+      if (typeof fullscreenDocument.webkitExitFullscreen === "function") {
+        await fullscreenDocument.webkitExitFullscreen.call(document);
+      }
+    } catch {
+      // Ignore browser timing issues if the document is no longer active.
+    }
   });
 
   const clearAudio = useEventCallback(() => {
@@ -733,9 +809,7 @@ export function PlayerPanel({
   useEffect(() => {
     const previousItem = previousItemRef.current;
 
-    if (document.fullscreenElement === panelRef.current) {
-      void document.exitFullscreen();
-    }
+    void exitFullscreenSafely(panelRef.current);
 
     if (previousItem?.id && previousItem.id !== item?.id) {
       void syncToAudiobookshelf("close", {
@@ -772,7 +846,8 @@ export function PlayerPanel({
     setSelectedServerSubtitleId("");
     setHasPlaybackStarted(false);
     setIsOptionsOpen(false);
-    setIsFullscreen(false);
+    setIsBrowserFullscreen(false);
+    setIsInlineFullscreen(false);
 
     if (!item) {
       setSubtitleSourceLabel("No subtitle file loaded");
@@ -791,7 +866,7 @@ export function PlayerPanel({
 
     setSubtitleSourceLabel("No subtitle file loaded");
     setSubtitleStatus("Choose an .srt file or attach one from Audiobookshelf.");
-  }, [item?.id]);
+  }, [exitFullscreenSafely, item?.id]);
 
   useEffect(() => {
     if (!item || sessionRef.current || audioRef.current?.src) {
@@ -1048,18 +1123,33 @@ export function PlayerPanel({
   }
 
   async function toggleFullscreen() {
-    const panel = panelRef.current;
+    const panel = panelRef.current as FullscreenPanelElement | null;
 
     if (!panel) {
       return;
     }
 
-    if (document.fullscreenElement === panel) {
-      await document.exitFullscreen();
+    if (isFullscreen) {
+      await exitFullscreenSafely(panel);
       return;
     }
 
-    await panel.requestFullscreen();
+    try {
+      if (typeof panel.requestFullscreen === "function") {
+        await panel.requestFullscreen();
+        return;
+      }
+
+      if (typeof panel.webkitRequestFullscreen === "function") {
+        await panel.webkitRequestFullscreen();
+        return;
+      }
+    } catch {
+      // Fall back to an in-page fullscreen layout for browsers like iPad Safari.
+    }
+
+    setIsInlineFullscreen(true);
+    setIsOptionsOpen(false);
   }
 
   function renderSubtitleTools() {
@@ -1362,7 +1452,9 @@ export function PlayerPanel({
       ref={panelRef}
       className={`player-panel ${isDock ? "player-panel-dock" : "player-panel-full"} ${
         focusMode ? "player-panel-focus" : ""
-      } ${isFullscreen ? "player-panel-fullscreen" : ""} ${
+      } ${isBrowserFullscreen ? "player-panel-fullscreen" : ""} ${
+        isInlineFullscreen ? "player-panel-inline-fullscreen" : ""
+      } ${
         shouldShowLyricsStage ? "player-panel-reading" : "player-panel-compact"
       }`}
     >

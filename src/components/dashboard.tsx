@@ -51,6 +51,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [recentIds, setRecentIds] = useState<string[]>([]);
   const [isPlayerOpen, setIsPlayerOpen] = useState(false);
+  const [isPlayerInlineFullscreen, setIsPlayerInlineFullscreen] = useState(false);
   const [playerOpenToken, setPlayerOpenToken] = useState(0);
 
   async function loadLibraries() {
@@ -177,11 +178,17 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
 
   useEffect(() => {
     if (!isPlayerOpen) {
+      setIsPlayerInlineFullscreen(false);
       return;
     }
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (isPlayerInlineFullscreen) {
+          setIsPlayerInlineFullscreen(false);
+          return;
+        }
+
         setIsPlayerOpen(false);
       }
     };
@@ -191,7 +198,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [isPlayerOpen]);
+  }, [isPlayerInlineFullscreen, isPlayerOpen]);
 
   const filteredItems = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -400,13 +407,22 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
       </section>
 
       {isPlayerOpen ? (
-        <section className="player-subsection-panel" aria-label="Player section">
+        <section
+          className={`player-subsection-panel ${
+            isPlayerInlineFullscreen ? "player-subsection-panel-fullscreen" : ""
+          }`}
+          aria-label="Player section"
+        >
           <div className="player-subsection-body">
             {itemState === "loading" ? <p className="status-message">Loading book details...</p> : null}
             {itemError ? <p className="status-message status-error">{itemError}</p> : null}
             <PlayerPanel
               item={selectedItem}
-              onHide={() => setIsPlayerOpen(false)}
+              onHide={() => {
+                setIsPlayerInlineFullscreen(false);
+                setIsPlayerOpen(false);
+              }}
+              onInlineFullscreenChange={setIsPlayerInlineFullscreen}
               onItemRefresh={loadItem}
               openToken={playerOpenToken}
               variant="dock"
