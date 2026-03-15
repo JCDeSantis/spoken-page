@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   AudioTrack,
   Chapter,
@@ -289,6 +289,7 @@ export function PlayerPanel({
   const [currentTime, setCurrentTime] = useState(item?.userMediaProgress?.currentTime ?? 0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [volume, setVolume] = useState(1);
   const [busyAction, setBusyAction] = useState<"starting" | "syncing" | "refreshing" | null>(null);
   const [playerStatus, setPlayerStatus] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
@@ -945,6 +946,16 @@ export function PlayerPanel({
   }, [playbackRate]);
 
   useEffect(() => {
+    const audio = audioRef.current;
+
+    if (!audio) {
+      return;
+    }
+
+    audio.volume = volume;
+  }, [volume]);
+
+  useEffect(() => {
     if (!session?.id) {
       return;
     }
@@ -1273,6 +1284,7 @@ export function PlayerPanel({
   function renderTransport() {
     const primaryLabel = !session ? "Start" : isPlaying ? "Pause" : "Play";
     const fullscreenLabel = isFullscreen ? "Exit full screen" : "Enter full screen";
+    const volumePercent = Math.round(volume * 100);
 
     return (
       <section className="transport">
@@ -1287,19 +1299,39 @@ export function PlayerPanel({
             {chapterLabel ? <span className="chapter-pill">{chapterLabel}</span> : null}
           </div>
 
-          <label className="speed-control">
-            <span>Speed</span>
-            <select
-              onChange={(event) => setPlaybackRate(Number(event.target.value))}
-              value={playbackRate}
-            >
-              {[0.8, 1, 1.15, 1.25, 1.4, 1.5, 1.75, 2].map((speed) => (
-                <option key={speed} value={speed}>
-                  {speed}x
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="transport-settings">
+            <label className="speed-control">
+              <span>Speed</span>
+              <select
+                onChange={(event) => setPlaybackRate(Number(event.target.value))}
+                value={playbackRate}
+              >
+                {[0.8, 1, 1.15, 1.25, 1.4, 1.5, 1.75, 2].map((speed) => (
+                  <option key={speed} value={speed}>
+                    {speed}x
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="volume-control">
+              <span>Volume</span>
+              <input
+                aria-label="Player volume"
+                className="volume-slider"
+                max={1}
+                min={0}
+                onChange={(event) => setVolume(Number(event.target.value))}
+                step={0.01}
+                style={{ "--volume-percent": `${volumePercent}%` } as CSSProperties}
+                type="range"
+                value={volume}
+              />
+              <output aria-live="off" className="volume-value">
+                {volumePercent}%
+              </output>
+            </label>
+          </div>
         </div>
 
         <input

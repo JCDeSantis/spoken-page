@@ -12,6 +12,7 @@ import {
 
 const FAVORITES_STORAGE_KEY = "spoken-page-favorites";
 const RECENTS_STORAGE_KEY = "spoken-page-recents";
+const HIDDEN_RECENTS_STORAGE_KEY = "spoken-page-hidden-recents";
 
 const EMPTY_BROWSE_FILTERS = {
   genre: "",
@@ -178,6 +179,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   const [libraryFilterError, setLibraryFilterError] = useState<string | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [recentIds, setRecentIds] = useState<string[]>([]);
+  const [hiddenRecentIds, setHiddenRecentIds] = useState<string[]>([]);
   const [isPlayerOpen, setIsPlayerOpen] = useState(false);
   const [isPlayerInlineFullscreen, setIsPlayerInlineFullscreen] = useState(false);
   const [playerOpenToken, setPlayerOpenToken] = useState(0);
@@ -294,6 +296,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     setItemError(null);
     setPlayerOpenToken((current) => current + 1);
     setIsPlayerOpen(true);
+    setHiddenRecentIds((current) => current.filter((entry) => entry !== itemId));
     rememberRecent(itemId);
   }
 
@@ -305,10 +308,18 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     );
   }
 
+  function dismissRecent(itemId: string) {
+    setRecentIds((current) => current.filter((entry) => entry !== itemId));
+    setHiddenRecentIds((current) =>
+      current.includes(itemId) ? current : [itemId, ...current],
+    );
+  }
+
   useEffect(() => {
     void loadLibraries();
     setFavoriteIds(parseStoredIds(window.localStorage.getItem(FAVORITES_STORAGE_KEY)));
     setRecentIds(parseStoredIds(window.localStorage.getItem(RECENTS_STORAGE_KEY)));
+    setHiddenRecentIds(parseStoredIds(window.localStorage.getItem(HIDDEN_RECENTS_STORAGE_KEY)));
   }, []);
 
   useEffect(() => {
@@ -318,6 +329,10 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   useEffect(() => {
     window.localStorage.setItem(RECENTS_STORAGE_KEY, JSON.stringify(recentIds));
   }, [recentIds]);
+
+  useEffect(() => {
+    window.localStorage.setItem(HIDDEN_RECENTS_STORAGE_KEY, JSON.stringify(hiddenRecentIds));
+  }, [hiddenRecentIds]);
 
   useEffect(() => {
     void loadItems(activeLibraryId);
@@ -440,13 +455,15 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
 
   const recentItems = useMemo(() => {
     const localRecentOrder = new Map(recentIds.map((id, index) => [id, index]));
+    const hiddenRecentSet = new Set(hiddenRecentIds);
 
     return [...items]
       .filter(
         (entry) =>
-          localRecentOrder.has(entry.id) ||
-          Boolean(entry.userMediaProgress?.lastUpdate) ||
-          (entry.userMediaProgress?.currentTime ?? 0) > 0,
+          !hiddenRecentSet.has(entry.id) &&
+          (localRecentOrder.has(entry.id) ||
+            Boolean(entry.userMediaProgress?.lastUpdate) ||
+            (entry.userMediaProgress?.currentTime ?? 0) > 0),
       )
       .sort((left, right) => {
         const lastUpdateDifference =
@@ -459,7 +476,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
         return (localRecentOrder.get(left.id) ?? 999) - (localRecentOrder.get(right.id) ?? 999);
       })
       .slice(0, 12);
-  }, [items, recentIds]);
+  }, [hiddenRecentIds, items, recentIds]);
 
   const activeLibrary = libraries.find((library) => library.id === activeLibraryId) ?? null;
 
@@ -486,6 +503,19 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
             <span>{entry.media.metadata.authorName ?? "Unknown author"}</span>
           </div>
         </button>
+
+        {section === "recent" ? (
+          <button
+            aria-label="Remove from recent books"
+            className="recent-chip"
+            onClick={(event) => {
+              event.stopPropagation();
+              dismissRecent(entry.id);
+            }}
+            title="Remove from recent books"
+            type="button"
+          />
+        ) : null}
 
         <button
           aria-label={isFavorite ? "Remove from saved books" : "Save this book"}
@@ -546,7 +576,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
           <section className="library-section-card">
             <div className="library-section-head">
               <div>
-                <p className="eyebrow">Quick Shelf</p>
                 <h3>Favorites</h3>
               </div>
               <span className="section-count">{favoriteItems.length}</span>
@@ -566,7 +595,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
           <section className="library-section-card">
             <div className="library-section-head">
               <div>
-                <p className="eyebrow">Continue</p>
                 <h3>Recent Books</h3>
               </div>
               <span className="section-count">{recentItems.length}</span>
@@ -587,16 +615,15 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
         <section className="library-section-card library-section-main">
           <div className="library-section-head">
             <div>
-              <p className="eyebrow">Browse</p>
-              <h3>All Books</h3>
+              <h3>Book Library</h3>
             </div>
             <span className="section-count">{filteredItems.length}</span>
           </div>
 
           <div className="all-books-searchbar">
             <label className="field">
-              <span>Search all books</span>
               <input
+                aria-label="Search book library"
                 className="library-search"
                 onChange={(event) => setFilter(event.target.value)}
                 placeholder="Search by title, author, or narrator"
