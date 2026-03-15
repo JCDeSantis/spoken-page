@@ -5,12 +5,25 @@ import { PlayerPanel } from "@/components/player-panel";
 import {
   AuthorizedSummary,
   Library,
+  LibraryFilterData,
   LibraryItemExpanded,
   LibraryItemMinified,
 } from "@/lib/types";
 
 const FAVORITES_STORAGE_KEY = "spoken-page-favorites";
 const RECENTS_STORAGE_KEY = "spoken-page-recents";
+
+const EMPTY_BROWSE_FILTERS = {
+  genre: "",
+  tag: "",
+  author: "",
+  narrator: "",
+  series: "",
+  language: "",
+};
+
+type BrowseFilters = typeof EMPTY_BROWSE_FILTERS;
+type BrowseFilterKey = keyof BrowseFilters;
 
 type DashboardProps = {
   initialLibraries: Library[];
@@ -34,6 +47,117 @@ function parseStoredIds(value: string | null) {
   }
 }
 
+function normalizeValue(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function compareByLabel(left: string, right: string) {
+  return left.localeCompare(right, undefined, { sensitivity: "base" });
+}
+
+function collectNames(value: string | null | undefined) {
+  if (!value) {
+    return [] as string[];
+  }
+
+  return value
+    .split(/,|;|\/| & /g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function matchesDelimitedValue(value: string | null | undefined, selected: string) {
+  if (!selected) {
+    return true;
+  }
+
+  const normalizedSelected = normalizeValue(selected);
+  const normalizedValue = normalizeValue(value);
+
+  if (!normalizedValue) {
+    return false;
+  }
+
+  if (normalizedValue === normalizedSelected) {
+    return true;
+  }
+
+  return collectNames(value).some((entry) => normalizeValue(entry) === normalizedSelected);
+}
+
+function deriveFilterData(items: LibraryItemMinified[]) {
+  const authors = new Map<string, string>();
+  const series = new Map<string, string>();
+  const genres = new Map<string, string>();
+  const tags = new Map<string, string>();
+  const narrators = new Map<string, string>();
+  const languages = new Map<string, string>();
+
+  for (const entry of items) {
+    for (const author of collectNames(entry.media.metadata.authorName)) {
+      authors.set(normalizeValue(author), author);
+    }
+
+    for (const narrator of collectNames(entry.media.metadata.narratorName)) {
+      narrators.set(normalizeValue(narrator), narrator);
+    }
+
+    const seriesName = entry.media.metadata.seriesName?.trim();
+    if (seriesName) {
+      series.set(normalizeValue(seriesName), seriesName);
+    }
+
+    for (const genre of entry.media.metadata.genres ?? []) {
+      const trimmed = genre.trim();
+      if (trimmed) {
+        genres.set(normalizeValue(trimmed), trimmed);
+      }
+    }
+
+    for (const tag of entry.media.tags ?? []) {
+      const trimmed = tag.trim();
+      if (trimmed) {
+        tags.set(normalizeValue(trimmed), trimmed);
+      }
+    }
+
+    const language = entry.media.metadata.language?.trim();
+    if (language) {
+      languages.set(normalizeValue(language), language);
+    }
+  }
+
+  return {
+    authors: [...authors.entries()]
+      .sort((left, right) => compareByLabel(left[1], right[1]))
+      .map(([id, name]) => ({ id, name })),
+    genres: [...genres.values()].sort(compareByLabel),
+    tags: [...tags.values()].sort(compareByLabel),
+    series: [...series.entries()]
+      .sort((left, right) => compareByLabel(left[1], right[1]))
+      .map(([id, name]) => ({ id, name })),
+    narrators: [...narrators.values()].sort(compareByLabel),
+    languages: [...languages.values()].sort(compareByLabel),
+  } satisfies LibraryFilterData;
+}
+
+function normalizeFilterData(payload: Partial<LibraryFilterData> | null | undefined) {
+  return {
+    authors: (payload?.authors ?? []).filter(
+      (entry): entry is LibraryFilterData["authors"][number] =>
+        Boolean(entry && typeof entry.id === "string" && typeof entry.name === "string"),
+    ),
+    genres: (payload?.genres ?? []).filter((entry): entry is string => typeof entry === "string"),
+    tags: (payload?.tags ?? []).filter((entry): entry is string => typeof entry === "string"),
+    series: (payload?.series ?? []).filter(
+      (entry): entry is LibraryFilterData["series"][number] =>
+        Boolean(entry && typeof entry.id === "string" && typeof entry.name === "string"),
+    ),
+    narrators: (payload?.narrators ?? []).filter((entry): entry is string => typeof entry === "string"),
+    languages: (payload?.languages ?? []).filter((entry): entry is string => typeof entry === "string"),
+  } satisfies LibraryFilterData;
+}
+
 export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) {
   const [libraries, setLibraries] = useState(initialLibraries);
   const [profile] = useState(initialProfile);
@@ -48,6 +172,10 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   const [itemState, setItemState] = useState<"idle" | "loading" | "error">("idle");
   const [itemError, setItemError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [browseFilters, setBrowseFilters] = useState<BrowseFilters>({ ...EMPTY_BROWSE_FILTERS });
+  const [libraryFilterData, setLibraryFilterData] = useState<LibraryFilterData | null>(null);
+  const [libraryFilterState, setLibraryFilterState] = useState<"idle" | "loading" | "error">("idle");
+  const [libraryFilterError, setLibraryFilterError] = useState<string | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [recentIds, setRecentIds] = useState<string[]>([]);
   const [isPlayerOpen, setIsPlayerOpen] = useState(false);
@@ -123,6 +251,33 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     return payload;
   }
 
+  async function loadFilterData(libraryId: string) {
+    if (!libraryId) {
+      setLibraryFilterData(null);
+      setLibraryFilterState("idle");
+      setLibraryFilterError(null);
+      return;
+    }
+
+    setLibraryFilterState("loading");
+    setLibraryFilterError(null);
+
+    const response = await fetch(`/api/libraries/${libraryId}/filterdata`);
+    const payload = (await response.json()) as Partial<LibraryFilterData> | { error?: string };
+
+    if (!response.ok || !("authors" in payload)) {
+      setLibraryFilterData(null);
+      setLibraryFilterState("error");
+      setLibraryFilterError(
+        "error" in payload ? payload.error ?? "Unable to load Audiobookshelf filters." : "Unable to load Audiobookshelf filters.",
+      );
+      return;
+    }
+
+    setLibraryFilterData(normalizeFilterData(payload));
+    setLibraryFilterState("idle");
+  }
+
   async function disconnect() {
     await fetch("/api/connection", { method: "DELETE" });
     window.location.reload();
@@ -169,6 +324,11 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   }, [activeLibraryId]);
 
   useEffect(() => {
+    void loadFilterData(activeLibraryId);
+    setBrowseFilters({ ...EMPTY_BROWSE_FILTERS });
+  }, [activeLibraryId]);
+
+  useEffect(() => {
     if (!selectedItemId || !isPlayerOpen) {
       return;
     }
@@ -200,21 +360,73 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     };
   }, [isPlayerInlineFullscreen, isPlayerOpen]);
 
+  const availableFilterData = useMemo(
+    () => libraryFilterData ?? deriveFilterData(items),
+    [items, libraryFilterData],
+  );
+
+  const activeFilterCount = useMemo(
+    () => Object.values(browseFilters).filter(Boolean).length,
+    [browseFilters],
+  );
+
+  const activeBrowseFilters = useMemo(
+    () =>
+      (
+        [
+          ["genre", browseFilters.genre, "Genre"],
+          ["tag", browseFilters.tag, "Tag"],
+          ["author", browseFilters.author, "Author"],
+          ["narrator", browseFilters.narrator, "Narrator"],
+          ["series", browseFilters.series, "Series"],
+          ["language", browseFilters.language, "Language"],
+        ] as const
+      )
+        .filter(([, value]) => Boolean(value))
+        .map(([key, value, label]) => ({
+          key: key as BrowseFilterKey,
+          label: `${label}: ${value}`,
+        })),
+    [browseFilters],
+  );
+
   const filteredItems = useMemo(() => {
     const query = filter.trim().toLowerCase();
-
-    if (!query) {
-      return items;
-    }
 
     return items.filter((entry) => {
       const title = entry.media.metadata.title.toLowerCase();
       const author = entry.media.metadata.authorName?.toLowerCase() ?? "";
       const narrator = entry.media.metadata.narratorName?.toLowerCase() ?? "";
+      const matchesQuery =
+        !query || title.includes(query) || author.includes(query) || narrator.includes(query);
+      const matchesGenre =
+        !browseFilters.genre ||
+        (entry.media.metadata.genres ?? []).some(
+          (genre) => normalizeValue(genre) === normalizeValue(browseFilters.genre),
+        );
+      const matchesTag =
+        !browseFilters.tag ||
+        (entry.media.tags ?? []).some((tag) => normalizeValue(tag) === normalizeValue(browseFilters.tag));
+      const matchesAuthor = matchesDelimitedValue(entry.media.metadata.authorName, browseFilters.author);
+      const matchesNarrator = matchesDelimitedValue(entry.media.metadata.narratorName, browseFilters.narrator);
+      const matchesSeries =
+        !browseFilters.series ||
+        normalizeValue(entry.media.metadata.seriesName) === normalizeValue(browseFilters.series);
+      const matchesLanguage =
+        !browseFilters.language ||
+        normalizeValue(entry.media.metadata.language) === normalizeValue(browseFilters.language);
 
-      return title.includes(query) || author.includes(query) || narrator.includes(query);
+      return (
+        matchesQuery &&
+        matchesGenre &&
+        matchesTag &&
+        matchesAuthor &&
+        matchesNarrator &&
+        matchesSeries &&
+        matchesLanguage
+      );
     });
-  }, [filter, items]);
+  }, [browseFilters, filter, items]);
 
   const itemsById = useMemo(() => new Map(items.map((entry) => [entry.id, entry])), [items]);
 
@@ -391,7 +603,171 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
                 value={filter}
               />
             </label>
+
+            <details className="library-filter-dropdown">
+              <summary>
+                <span className="library-filter-summary-label">
+                  <span>Filters</span>
+                  <span className="library-filter-summary-copy">
+                    {activeFilterCount > 0 ? `${activeFilterCount} active` : "Genre, author, series, and more"}
+                  </span>
+                </span>
+                <span className="library-filter-summary-count">{activeFilterCount}</span>
+              </summary>
+
+              <div className="library-filter-dropdown-body">
+                <div className="library-filter-dropdown-head">
+                  <div>
+                    <p className="eyebrow">Refine Shelf</p>
+                    <h4>Browse filters</h4>
+                  </div>
+
+                  <button
+                    className="button button-secondary button-compact"
+                    disabled={activeFilterCount === 0}
+                    onClick={() => setBrowseFilters({ ...EMPTY_BROWSE_FILTERS })}
+                    type="button"
+                  >
+                    Clear all
+                  </button>
+                </div>
+
+                {libraryFilterState === "loading" ? (
+                  <p className="library-filter-status">Loading Audiobookshelf filters...</p>
+                ) : null}
+                {libraryFilterError ? (
+                  <p className="library-filter-status">
+                    Using the books already loaded here to build the filter list.
+                  </p>
+                ) : null}
+
+                <div className="library-filter-grid">
+                  <label className="field">
+                    <span>Genre</span>
+                    <select
+                      onChange={(event) =>
+                        setBrowseFilters((current) => ({ ...current, genre: event.target.value }))
+                      }
+                      value={browseFilters.genre}
+                    >
+                      <option value="">All genres</option>
+                      {availableFilterData.genres.map((genre) => (
+                        <option key={genre} value={genre}>
+                          {genre}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>Tag</span>
+                    <select
+                      onChange={(event) =>
+                        setBrowseFilters((current) => ({ ...current, tag: event.target.value }))
+                      }
+                      value={browseFilters.tag}
+                    >
+                      <option value="">All tags</option>
+                      {availableFilterData.tags.map((tag) => (
+                        <option key={tag} value={tag}>
+                          {tag}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>Author</span>
+                    <select
+                      onChange={(event) =>
+                        setBrowseFilters((current) => ({ ...current, author: event.target.value }))
+                      }
+                      value={browseFilters.author}
+                    >
+                      <option value="">All authors</option>
+                      {availableFilterData.authors.map((authorOption) => (
+                        <option key={authorOption.id} value={authorOption.name}>
+                          {authorOption.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>Narrator</span>
+                    <select
+                      onChange={(event) =>
+                        setBrowseFilters((current) => ({ ...current, narrator: event.target.value }))
+                      }
+                      value={browseFilters.narrator}
+                    >
+                      <option value="">All narrators</option>
+                      {availableFilterData.narrators.map((narratorOption) => (
+                        <option key={narratorOption} value={narratorOption}>
+                          {narratorOption}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>Series</span>
+                    <select
+                      onChange={(event) =>
+                        setBrowseFilters((current) => ({ ...current, series: event.target.value }))
+                      }
+                      value={browseFilters.series}
+                    >
+                      <option value="">All series</option>
+                      {availableFilterData.series.map((seriesOption) => (
+                        <option key={seriesOption.id} value={seriesOption.name}>
+                          {seriesOption.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>Language</span>
+                    <select
+                      onChange={(event) =>
+                        setBrowseFilters((current) => ({ ...current, language: event.target.value }))
+                      }
+                      value={browseFilters.language}
+                    >
+                      <option value="">All languages</option>
+                      {availableFilterData.languages.map((language) => (
+                        <option key={language} value={language}>
+                          {language}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </details>
           </div>
+
+          {activeBrowseFilters.length > 0 ? (
+            <div className="all-books-active-filters" aria-label="Active filters">
+              {activeBrowseFilters.map((entry) => (
+                <button
+                  className="filter-chip-pill"
+                  key={entry.key}
+                  onClick={() =>
+                    setBrowseFilters((current) => ({
+                      ...current,
+                      [entry.key]: "",
+                    }))
+                  }
+                  type="button"
+                >
+                  <span>{entry.label}</span>
+                  <span aria-hidden="true">x</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           {itemsState === "loading" ? <p className="status-message">Loading books...</p> : null}
           {itemsError ? <p className="status-message status-error">{itemsError}</p> : null}

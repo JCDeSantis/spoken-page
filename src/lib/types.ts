@@ -13,6 +13,22 @@ export type LibraryItemMetadata = {
   seriesName?: string | null;
   description?: string | null;
   publishedYear?: string | null;
+  genres?: string[];
+  language?: string | null;
+};
+
+export type LibraryFilterEntity = {
+  id: string;
+  name: string;
+};
+
+export type LibraryFilterData = {
+  authors: LibraryFilterEntity[];
+  genres: string[];
+  tags: string[];
+  series: LibraryFilterEntity[];
+  narrators: string[];
+  languages: string[];
 };
 
 export type AudioTrack = {
@@ -69,6 +85,7 @@ export type LibraryItemMinified = {
   mediaType: "book" | "podcast";
   media: {
     metadata: LibraryItemMetadata;
+    tags?: string[];
     duration: number;
     coverPath?: string | null;
     numTracks?: number;

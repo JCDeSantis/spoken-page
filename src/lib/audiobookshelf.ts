@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import {
   AuthorizedSummary,
+  LibraryFilterData,
   LibraryItemsResponse,
   LibraryListResponse,
   LibraryItemExpanded,
@@ -200,7 +201,7 @@ export async function listLibraryItems(libraryId: string, connection?: Audiobook
   const params = new URLSearchParams({
     sort: "media.metadata.title",
     minified: "1",
-    limit: "200",
+    limit: "0",
     page: "0",
     include: "progress",
   });
@@ -209,6 +210,12 @@ export async function listLibraryItems(libraryId: string, connection?: Audiobook
     `/api/libraries/${libraryId}/items?${params.toString()}`,
     { connection },
   );
+}
+
+export async function getLibraryFilterData(libraryId: string, connection?: AudiobookshelfConnection) {
+  return absJson<LibraryFilterData>(`/api/libraries/${libraryId}/filterdata`, {
+    connection,
+  });
 }
 
 export async function getLibraryItem(itemId: string, connection?: AudiobookshelfConnection) {
