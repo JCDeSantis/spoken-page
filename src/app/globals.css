@@ -1191,16 +1191,32 @@ img {
 
 .player-panel-fullscreen,
 .player-panel-inline-fullscreen {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
   padding: 1.5rem;
-  align-content: start;
+  align-content: stretch;
   background: var(--fullscreen-bg);
 }
 
 .player-panel-inline-fullscreen {
-  min-height: 100%;
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  width: 100vw;
+  min-height: 100dvh;
+  height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   border-radius: 0;
+  padding:
+    max(1rem, env(safe-area-inset-top, 0px))
+    max(1rem, env(safe-area-inset-right, 0px))
+    max(1rem, env(safe-area-inset-bottom, 0px))
+    max(1rem, env(safe-area-inset-left, 0px));
 }
 
 .player-panel-fullscreen .subtitle-stage,
@@ -1213,13 +1229,22 @@ img {
 
 .player-panel-fullscreen .subtitle-stage,
 .player-panel-inline-fullscreen .subtitle-stage {
+  display: grid;
+  align-self: stretch;
+  min-height: 0;
   margin-top: 0;
 }
 
 .player-panel-fullscreen .subtitle-card,
 .player-panel-inline-fullscreen .subtitle-card {
-  min-height: min(52vh, 460px);
+  height: 100%;
+  min-height: 0;
   align-content: center;
+}
+
+.player-panel-fullscreen .transport,
+.player-panel-inline-fullscreen .transport {
+  align-self: end;
 }
 
 .player-panel-fullscreen .subtitle-active,
@@ -1965,9 +1990,16 @@ img {
     transform: none;
   }
 
-  .player-panel-fullscreen,
-  .player-panel-inline-fullscreen {
+  .player-panel-fullscreen {
     padding: 1.1rem;
+  }
+
+  .player-panel-inline-fullscreen {
+    padding:
+      max(0.95rem, env(safe-area-inset-top, 0px))
+      max(0.95rem, env(safe-area-inset-right, 0px))
+      max(0.95rem, env(safe-area-inset-bottom, 0px))
+      max(0.95rem, env(safe-area-inset-left, 0px));
   }
 
   .player-subsection-panel.player-subsection-panel-fullscreen {

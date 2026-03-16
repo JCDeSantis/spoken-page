@@ -36,6 +36,19 @@ type FullscreenPanelElement = HTMLElement & {
   webkitRequestFullscreen?: () => Promise<void> | void;
 };
 
+type WakeLockSentinelLike = {
+  released?: boolean;
+  release: () => Promise<void>;
+  addEventListener?: (type: "release", listener: EventListener) => void;
+  removeEventListener?: (type: "release", listener: EventListener) => void;
+};
+
+type NavigatorWithWakeLock = Navigator & {
+  wakeLock?: {
+    request?: (type: "screen") => Promise<WakeLockSentinelLike>;
+  };
+};
+
 const AUTO_SYNC_INTERVAL_MS = 20000;
 const AUTO_SYNC_MIN_PROGRESS_SECONDS = 5;
 const STATUS_MESSAGE_DURATION_MS = 5000;
@@ -309,6 +322,9 @@ export function PlayerPanel({
   const trackRequestIdRef = useRef(0);
   const lastSyncedTimeRef = useRef(0);
   const lastAutoRefreshTokenRef = useRef(0);
+  const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
+  const wakeLockReleaseListenerRef = useRef<EventListener | null>(null);
+  const fullscreenFallbackStatusShownRef = useRef(false);
 
   const [session, setSession] = useState<PlaybackSession | null>(null);
   const [trackLoadRequest, setTrackLoadRequest] = useState<TrackLoadRequest | null>(null);
@@ -358,6 +374,7 @@ export function PlayerPanel({
   const isFullscreen = isBrowserFullscreen || isInlineFullscreen;
   const shouldShowLyricsStage = !isDock || focusMode || isFullscreen || hasPlaybackStarted;
   const shouldShowLoadedSubtitlePrompt = hasLoadedSubtitles && !hasPlaybackStarted;
+  const shouldKeepScreenAwake = isPlaying;
   const chapterLabel = useMemo(() => formatChapterLabel(activeChapter?.title), [activeChapter?.title]);
   const hasPreviousChapter = activeChapterIndex > 0;
   const hasNextChapter = activeChapterIndex >= 0 && activeChapterIndex < chapters.length - 1;
@@ -530,6 +547,110 @@ export function PlayerPanel({
       // Ignore browser timing issues if the document is no longer active.
     }
   });
+
+  const clearWakeLockReference = useEventCallback(() => {
+    const sentinel = wakeLockRef.current;
+    const listener = wakeLockReleaseListenerRef.current;
+
+    if (sentinel && listener && typeof sentinel.removeEventListener === "function") {
+      sentinel.removeEventListener("release", listener);
+    }
+
+    wakeLockRef.current = null;
+    wakeLockReleaseListenerRef.current = null;
+  });
+
+  const releaseWakeLock = useEventCallback(async () => {
+    const sentinel = wakeLockRef.current;
+
+    if (!sentinel) {
+      return;
+    }
+
+    clearWakeLockReference();
+
+    try {
+      await sentinel.release();
+    } catch {
+      // Ignore wake lock teardown errors during tab switches and unload.
+    }
+  });
+
+  const requestWakeLock = useEventCallback(async () => {
+    if (typeof document === "undefined" || typeof navigator === "undefined") {
+      return false;
+    }
+
+    if (document.visibilityState !== "visible") {
+      return false;
+    }
+
+    const activeWakeLock = wakeLockRef.current;
+
+    if (activeWakeLock && !activeWakeLock.released) {
+      return true;
+    }
+
+    clearWakeLockReference();
+
+    const wakeLockNavigator = navigator as NavigatorWithWakeLock;
+
+    if (typeof wakeLockNavigator.wakeLock?.request !== "function") {
+      return false;
+    }
+
+    try {
+      const sentinel = await wakeLockNavigator.wakeLock.request("screen");
+      const handleRelease: EventListener = () => {
+        if (wakeLockRef.current === sentinel) {
+          wakeLockRef.current = null;
+          wakeLockReleaseListenerRef.current = null;
+        }
+      };
+
+      sentinel.addEventListener?.("release", handleRelease);
+      wakeLockRef.current = sentinel;
+      wakeLockReleaseListenerRef.current = handleRelease;
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if (!shouldKeepScreenAwake) {
+      void releaseWakeLock();
+      return;
+    }
+
+    void requestWakeLock();
+  }, [releaseWakeLock, requestWakeLock, shouldKeepScreenAwake]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        if (shouldKeepScreenAwake) {
+          void requestWakeLock();
+        }
+
+        return;
+      }
+
+      void releaseWakeLock();
+    };
+
+    const handlePageHide = () => {
+      void releaseWakeLock();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handlePageHide);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [releaseWakeLock, requestWakeLock, shouldKeepScreenAwake]);
 
   const clearAudio = useEventCallback(() => {
     const audio = audioRef.current;
@@ -918,6 +1039,8 @@ export function PlayerPanel({
     setSubtitleOffset(0);
     setSelectedServerSubtitleId("");
     setHasPlaybackStarted(false);
+    fullscreenFallbackStatusShownRef.current = false;
+    void releaseWakeLock();
     setIsOptionsOpen(false);
     setIsBrowserFullscreen(false);
     setIsInlineFullscreen(false);
@@ -939,7 +1062,7 @@ export function PlayerPanel({
 
     setSubtitleSourceLabel("No subtitle file loaded");
     setSubtitleStatus(null);
-  }, [exitFullscreenSafely, item?.id]);
+  }, [exitFullscreenSafely, item?.id, releaseWakeLock]);
 
   useEffect(() => {
     if (!item || sessionRef.current || audioRef.current?.src) {
@@ -1052,9 +1175,10 @@ export function PlayerPanel({
   useEffect(() => {
     return () => {
       pauseListeningClock();
+      void releaseWakeLock();
       void syncToAudiobookshelf("close", { silent: true, refreshItem: false });
     };
-  }, [pauseListeningClock, syncToAudiobookshelf]);
+  }, [pauseListeningClock, releaseWakeLock, syncToAudiobookshelf]);
 
   async function handleManualSubtitleUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -1200,11 +1324,13 @@ export function PlayerPanel({
   function handlePlay() {
     setIsPlaying(true);
     resumeListeningClock();
+    void requestWakeLock();
   }
 
   function handlePause() {
     setIsPlaying(false);
     pauseListeningClock();
+    void releaseWakeLock();
   }
 
   function handleEnded() {
@@ -1248,7 +1374,7 @@ export function PlayerPanel({
 
     try {
       if (typeof panel.requestFullscreen === "function") {
-        await panel.requestFullscreen();
+        await panel.requestFullscreen({ navigationUI: "hide" });
         return;
       }
 
@@ -1262,6 +1388,11 @@ export function PlayerPanel({
 
     setIsInlineFullscreen(true);
     setIsOptionsOpen(false);
+
+    if (!fullscreenFallbackStatusShownRef.current) {
+      setPlayerStatus("Using the immersive tablet view for this browser.");
+      fullscreenFallbackStatusShownRef.current = true;
+    }
   }
 
   function renderSubtitleTools() {

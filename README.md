@@ -183,12 +183,21 @@ Recommendation:
 
 The app server itself is stateless. Spoken Page does not need its own persistent app-data volume to run. It depends on your Audiobookshelf server for actual library and playback state.
 
+If you want iPad screen wake to work reliably during playback, serve Spoken Page over `https://`. A plain LAN address such as `http://192.168.1.50:3000` can still let the device go to sleep.
+
 Security defaults:
 
 - Set `SPOKEN_PAGE_SECRET` in production so saved connections survive restarts and the stored connection cookie is signed with your own secret.
 - Set `SPOKEN_PAGE_ABS_BASE_URL` to lock the app to one Audiobookshelf server.
 - Set `SPOKEN_PAGE_ALLOWED_BASE_URLS` if you want to allow a short list of exact ABS URLs instead.
 - `SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS=true` restores the older behavior that lets users type any URL, but that is less safe and is not recommended for public deployments.
+
+Tablet note:
+
+- On iPad, Safari currently gives the best fullscreen experience with Spoken Page.
+- Firefox on iPad still works, but Apple browser limitations can prevent true device-level fullscreen or consistent screen wake behavior there.
+- Screen wake requires a secure context. If you open Spoken Page on an iPad at a plain LAN URL such as `http://192.168.1.50:3000`, Safari can still let the device sleep.
+- For reliable screen wake on iPad, serve Spoken Page over `https://` through a reverse proxy or other TLS setup.
 
 ## GitHub Container Publishing
 
