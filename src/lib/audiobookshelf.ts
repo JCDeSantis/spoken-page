@@ -298,6 +298,31 @@ async function getRequiredConnection(explicit?: AudiobookshelfConnection) {
   return connection;
 }
 
+function formatUpstreamError(response: Response, url: string, text: string) {
+  const statusLabel = response.statusText
+    ? `${response.status} ${response.statusText}`
+    : `status ${response.status}`;
+  const trimmed = text.trim();
+  const stripped = trimmed.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const isHtmlDocument = /<(?:!doctype|html|head|body|title)\b/i.test(trimmed);
+
+  if (isHtmlDocument) {
+    const upstreamOrigin = new URL(url).origin;
+
+    if (response.status === 403) {
+      return `Audiobookshelf returned 403 Forbidden from ${upstreamOrigin}. This usually means SPOKEN_PAGE_ABS_BASE_URL points to the wrong host or path, or a reverse proxy is blocking the ABS API. Check the URL, include any ABS subpath, and prefer an internal Docker URL like http://audiobookshelf:80 when both apps share a compose stack.`;
+    }
+
+    return `Audiobookshelf returned ${statusLabel} from ${upstreamOrigin}. Check SPOKEN_PAGE_ABS_BASE_URL and any reverse proxy or subpath in front of Audiobookshelf.`;
+  }
+
+  if (stripped) {
+    return stripped;
+  }
+
+  return `Audiobookshelf request failed with ${statusLabel}.`;
+}
+
 export async function absFetch(path: string, init: FetchInit = {}) {
   const connection = await getRequiredConnection(init.connection);
   const url = resolveServerUrl(connection.baseUrl, path);
@@ -326,7 +351,7 @@ export async function absFetch(path: string, init: FetchInit = {}) {
       } else {
         const text = (await response.text()).trim();
         if (text) {
-          message = text;
+          message = formatUpstreamError(response, url, text);
         }
       }
     } catch {

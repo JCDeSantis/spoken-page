@@ -80,6 +80,7 @@ Quick env var guide:
   `http://audiobookshelf:80` for the same compose stack,
   `http://host.docker.internal:13378` for Docker Desktop on the same server,
   `http://192.168.1.50:13378` for a Linux server or another machine on your network,
+  `https://example.com/audiobookshelf` if ABS is behind a subpath,
   or `https://abs.example.com` if ABS already has a domain.
 - `SPOKEN_PAGE_ALLOWED_BASE_URLS`
   Optional comma-separated list of exact Audiobookshelf URLs to allow instead of locking the app to one URL.
@@ -92,6 +93,7 @@ Simple example:
   `SPOKEN_PAGE_ABS_BASE_URL=http://192.168.1.50:13378`
 - Your PCs or tablets would still open Spoken Page separately at
   `http://192.168.1.50:3000`
+- If you see a reverse proxy error page such as `403 Forbidden` from `openresty`, the ABS URL usually points to the wrong host/path or the proxy is blocking the ABS API.
 
 3. From the project directory, run:
 
