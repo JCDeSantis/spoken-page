@@ -71,7 +71,27 @@ SPOKEN_PAGE_SECRET=replace-this-with-a-long-random-string
 SPOKEN_PAGE_ABS_BASE_URL=http://host.docker.internal:13378
 ```
 
-Use `SPOKEN_PAGE_ALLOWED_BASE_URLS` instead if you want to allow more than one exact Audiobookshelf URL.
+Quick env var guide:
+
+- `SPOKEN_PAGE_SECRET`
+  A private random string you make up for Spoken Page. It is not your Audiobookshelf API token. Spoken Page uses it to protect the saved connection cookie.
+- `SPOKEN_PAGE_ABS_BASE_URL`
+  The Audiobookshelf URL Spoken Page should reach from inside Docker. This is not the browser URL for Spoken Page. Common examples:
+  `http://audiobookshelf:80` for the same compose stack,
+  `http://host.docker.internal:13378` for Docker Desktop on the same server,
+  `http://192.168.1.50:13378` for a Linux server or another machine on your network,
+  or `https://abs.example.com` if ABS already has a domain.
+- `SPOKEN_PAGE_ALLOWED_BASE_URLS`
+  Optional comma-separated list of exact Audiobookshelf URLs to allow instead of locking the app to one URL.
+- `SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS`
+  Optional `true` to let users type any server URL manually. This is less safe, so most installs should leave it off.
+
+Simple example:
+
+- If Audiobookshelf is at `http://192.168.1.50:13378`, then set
+  `SPOKEN_PAGE_ABS_BASE_URL=http://192.168.1.50:13378`
+- Your PCs or tablets would still open Spoken Page separately at
+  `http://192.168.1.50:3000`
 
 3. From the project directory, run:
 
