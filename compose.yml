@@ -1,0 +1,12 @@
+services:
+  spoken-page:
+    image: ghcr.io/jcdesantis/spoken-page:latest
+    container_name: spoken-page
+    environment:
+      SPOKEN_PAGE_SECRET: ${SPOKEN_PAGE_SECRET:-}
+      SPOKEN_PAGE_ABS_BASE_URL: ${SPOKEN_PAGE_ABS_BASE_URL:-}
+      SPOKEN_PAGE_ALLOWED_BASE_URLS: ${SPOKEN_PAGE_ALLOWED_BASE_URLS:-}
+      SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS: ${SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS:-false}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

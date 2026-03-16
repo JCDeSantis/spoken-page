@@ -1,3 +1,4 @@
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import {
   AuthorizedSummary,
@@ -9,6 +10,15 @@ import {
 } from "@/lib/types";
 
 const CONNECTION_COOKIE = "abs_sync_connection";
+const CONNECTION_COOKIE_VERSION = 1;
+const APP_CLIENT_NAME = "Spoken Page";
+const APP_CLIENT_VERSION = "1.0.0";
+const CONNECTION_SECRET_ENV = "SPOKEN_PAGE_SECRET";
+const LOCKED_BASE_URL_ENV = "SPOKEN_PAGE_ABS_BASE_URL";
+const ALLOWED_BASE_URLS_ENV = "SPOKEN_PAGE_ALLOWED_BASE_URLS";
+const UNSAFE_CUSTOM_CONNECTIONS_ENV = "SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS";
+
+let generatedConnectionSecret: string | null = null;
 
 export type AudiobookshelfConnection = {
   baseUrl: string;
@@ -16,8 +26,22 @@ export type AudiobookshelfConnection = {
   deviceId: string;
 };
 
+export type ConnectionPolicy = {
+  lockedBaseUrl: string | null;
+  allowedBaseUrls: string[];
+  customBaseUrlEnabled: boolean;
+  requiresServerConfiguration: boolean;
+  secretConfigured: boolean;
+};
+
 type FetchInit = RequestInit & {
   connection?: AudiobookshelfConnection;
+};
+
+type StoredConnectionEnvelope = {
+  version: number;
+  payload: string;
+  signature: string;
 };
 
 function normalizeBaseUrl(value: string) {
@@ -35,27 +59,152 @@ function normalizeBaseUrl(value: string) {
   return parsed.toString().replace(/\/$/, "");
 }
 
+function getConnectionSecret() {
+  const configuredSecret = process.env[CONNECTION_SECRET_ENV]?.trim();
+
+  if (configuredSecret) {
+    return configuredSecret;
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    return "spoken-page-dev-secret";
+  }
+
+  generatedConnectionSecret ??= randomBytes(32).toString("hex");
+  return generatedConnectionSecret;
+}
+
+function isUnsafeCustomConnectionsEnabled() {
+  return process.env[UNSAFE_CUSTOM_CONNECTIONS_ENV]?.trim().toLowerCase() === "true";
+}
+
+function getLockedBaseUrl() {
+  const configuredBaseUrl = process.env[LOCKED_BASE_URL_ENV]?.trim();
+  return configuredBaseUrl ? normalizeBaseUrl(configuredBaseUrl) : null;
+}
+
+function parseAllowedBaseUrls() {
+  const rawValue = process.env[ALLOWED_BASE_URLS_ENV]?.trim();
+
+  if (!rawValue) {
+    return [] as string[];
+  }
+
+  return rawValue
+    .split(/[\n,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => normalizeBaseUrl(entry));
+}
+
+function dedupeBaseUrls(entries: string[]) {
+  return [...new Set(entries)];
+}
+
+export function getConnectionPolicy(): ConnectionPolicy {
+  const lockedBaseUrl = getLockedBaseUrl();
+  const allowedBaseUrls = dedupeBaseUrls([
+    ...(lockedBaseUrl ? [lockedBaseUrl] : []),
+    ...parseAllowedBaseUrls(),
+  ]);
+  const requiresServerConfiguration =
+    process.env.NODE_ENV === "production" &&
+    !lockedBaseUrl &&
+    allowedBaseUrls.length === 0 &&
+    !isUnsafeCustomConnectionsEnabled();
+
+  return {
+    lockedBaseUrl,
+    allowedBaseUrls,
+    customBaseUrlEnabled: !lockedBaseUrl && !requiresServerConfiguration,
+    requiresServerConfiguration,
+    secretConfigured: Boolean(process.env[CONNECTION_SECRET_ENV]?.trim()),
+  };
+}
+
+function validateConnectionBaseUrl(value: string) {
+  const normalized = normalizeBaseUrl(value);
+  const policy = getConnectionPolicy();
+
+  if (policy.requiresServerConfiguration) {
+    throw new Error(
+      `This deployment needs ${LOCKED_BASE_URL_ENV} or ${ALLOWED_BASE_URLS_ENV} configured before it can connect to Audiobookshelf.`,
+    );
+  }
+
+  if (policy.lockedBaseUrl && normalized !== policy.lockedBaseUrl) {
+    throw new Error(`This deployment is locked to ${policy.lockedBaseUrl}.`);
+  }
+
+  if (policy.allowedBaseUrls.length > 0 && !policy.allowedBaseUrls.includes(normalized)) {
+    throw new Error("That Audiobookshelf URL is not allowed by this deployment.");
+  }
+
+  return normalized;
+}
+
+function signConnectionPayload(payload: string) {
+  return createHmac("sha256", getConnectionSecret()).update(payload).digest("base64url");
+}
+
+function verifyConnectionSignature(payload: string, signature: string) {
+  const expectedSignature = signConnectionPayload(payload);
+  const expectedBuffer = Buffer.from(expectedSignature, "utf8");
+  const signatureBuffer = Buffer.from(signature, "utf8");
+
+  return (
+    expectedBuffer.length === signatureBuffer.length &&
+    timingSafeEqual(expectedBuffer, signatureBuffer)
+  );
+}
+
+function serializeConnection(connection: AudiobookshelfConnection) {
+  const payload = Buffer.from(JSON.stringify(connection), "utf8").toString("base64url");
+
+  return JSON.stringify({
+    version: CONNECTION_COOKIE_VERSION,
+    payload,
+    signature: signConnectionPayload(payload),
+  } satisfies StoredConnectionEnvelope);
+}
+
+function parseSerializedConnection(payload: string) {
+  const decoded = Buffer.from(payload, "base64url").toString("utf8");
+  const parsed = JSON.parse(decoded) as Partial<AudiobookshelfConnection>;
+
+  if (
+    typeof parsed.baseUrl !== "string" ||
+    typeof parsed.token !== "string" ||
+    typeof parsed.deviceId !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    baseUrl: validateConnectionBaseUrl(parsed.baseUrl),
+    token: parsed.token,
+    deviceId: parsed.deviceId,
+  } satisfies AudiobookshelfConnection;
+}
+
 function parseConnection(rawValue: string | undefined) {
   if (!rawValue) {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(rawValue) as Partial<AudiobookshelfConnection>;
+    const parsed = JSON.parse(rawValue) as Partial<StoredConnectionEnvelope>;
 
     if (
-      typeof parsed.baseUrl !== "string" ||
-      typeof parsed.token !== "string" ||
-      typeof parsed.deviceId !== "string"
+      parsed.version !== CONNECTION_COOKIE_VERSION ||
+      typeof parsed.payload !== "string" ||
+      typeof parsed.signature !== "string" ||
+      !verifyConnectionSignature(parsed.payload, parsed.signature)
     ) {
       return null;
     }
 
-    return {
-      baseUrl: normalizeBaseUrl(parsed.baseUrl),
-      token: parsed.token,
-      deviceId: parsed.deviceId,
-    } satisfies AudiobookshelfConnection;
+    return parseSerializedConnection(parsed.payload);
   } catch {
     return null;
   }
@@ -68,7 +217,7 @@ export async function getConnection() {
 
 export async function setConnection(connection: AudiobookshelfConnection) {
   const store = await cookies();
-  store.set(CONNECTION_COOKIE, JSON.stringify(connection), {
+  store.set(CONNECTION_COOKIE, serializeConnection(connection), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -88,17 +237,52 @@ export function sanitizeConnectionInput(baseUrl: string, token: string) {
   }
 
   return {
-    baseUrl: normalizeBaseUrl(baseUrl),
+    baseUrl: validateConnectionBaseUrl(baseUrl),
     token: token.trim(),
   };
 }
 
+function withBasePath(serverUrl: URL, path: string) {
+  const basePath = serverUrl.pathname === "/" ? "" : serverUrl.pathname.replace(/\/$/, "");
+
+  if (!basePath) {
+    return path;
+  }
+
+  if (path === basePath || path.startsWith(`${basePath}/`)) {
+    return path;
+  }
+
+  if (path.startsWith("/")) {
+    return `${basePath}${path}`;
+  }
+
+  return `${basePath}/${path.replace(/^\/+/, "")}`;
+}
+
 export function resolveServerUrl(baseUrl: string, path: string) {
-  const resolved = new URL(path, baseUrl);
   const serverUrl = new URL(baseUrl);
+  const trimmedPath = path.trim();
+  const isAbsolutePath = /^[a-z][a-z\d+\-.]*:/i.test(trimmedPath);
+  const basePath = serverUrl.pathname === "/" ? "" : serverUrl.pathname.replace(/\/$/, "");
+  const basePathUrl = new URL(basePath ? `${serverUrl.origin}${basePath}/` : `${serverUrl.origin}/`);
+  const resolved = isAbsolutePath
+    ? new URL(trimmedPath)
+    : new URL(
+        withBasePath(serverUrl, trimmedPath.startsWith("/") ? trimmedPath : trimmedPath.replace(/^\/+/, "")),
+        basePathUrl,
+      );
 
   if (resolved.origin !== serverUrl.origin) {
     throw new Error("Cross-origin Audiobookshelf paths are not allowed.");
+  }
+
+  if (
+    basePath &&
+    resolved.pathname !== basePath &&
+    !resolved.pathname.startsWith(`${basePath}/`)
+  ) {
+    throw new Error("Cross-path Audiobookshelf requests are not allowed.");
   }
 
   return resolved.toString();
@@ -244,9 +428,9 @@ export async function startPlaybackSession(itemId: string, connection?: Audioboo
     body: JSON.stringify({
       deviceInfo: {
         deviceId: liveConnection.deviceId,
-        clientName: "Shelf Sync Subtitles",
-        clientVersion: "0.1.0",
-        manufacturer: "Custom Web App",
+        clientName: APP_CLIENT_NAME,
+        clientVersion: APP_CLIENT_VERSION,
+        manufacturer: APP_CLIENT_NAME,
         model: "Browser",
       },
       mediaPlayer: "html5",

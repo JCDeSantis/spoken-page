@@ -52,6 +52,10 @@ function normalizeValue(value: string | null | undefined) {
   return (value ?? "").trim().toLowerCase();
 }
 
+function collapseWhitespace(value: string | null | undefined) {
+  return (value ?? "").trim().replace(/\s+/g, " ");
+}
+
 function compareByLabel(left: string, right: string) {
   return left.localeCompare(right, undefined, { sensitivity: "base" });
 }
@@ -86,6 +90,84 @@ function matchesDelimitedValue(value: string | null | undefined, selected: strin
   return collectNames(value).some((entry) => normalizeValue(entry) === normalizedSelected);
 }
 
+function stripSeriesSuffix(value: string | null | undefined) {
+  const collapsed = collapseWhitespace(value);
+
+  if (!collapsed) {
+    return "";
+  }
+
+  const labeledSuffixRemoved = collapsed
+    .replace(/(?:\s*[-,:]\s*)?(?:book|bk|volume|vol(?:ume)?|part)\s*\d+(?:\.\d+)?$/i, "")
+    .replace(/(?:\s*[-,:]\s*)?#\s*\d+(?:\.\d+)?$/i, "")
+    .trim();
+
+  if (labeledSuffixRemoved !== collapsed) {
+    return labeledSuffixRemoved;
+  }
+
+  const separatedNumberMatch = collapsed.match(/^(.*\S)\s*[-:]\s*\d+(?:\.\d+)?$/);
+  if (separatedNumberMatch) {
+    const base = separatedNumberMatch[1].trim();
+    if (base.split(/\s+/).length > 1) {
+      return base;
+    }
+  }
+
+  const bareNumberMatch = collapsed.match(/^(.*\S)\s+\d+(?:\.\d+)?$/);
+  if (bareNumberMatch) {
+    const base = bareNumberMatch[1].trim();
+    if (base.split(/\s+/).length > 1) {
+      return base;
+    }
+  }
+
+  return collapsed;
+}
+
+function getSeriesFilterKey(value: string | null | undefined) {
+  return normalizeValue(stripSeriesSuffix(value));
+}
+
+function matchesSeriesValue(value: string | null | undefined, selected: string) {
+  if (!selected) {
+    return true;
+  }
+
+  const normalizedValue = normalizeValue(value);
+  const normalizedSelected = normalizeValue(selected);
+
+  if (!normalizedValue) {
+    return false;
+  }
+
+  if (normalizedValue === normalizedSelected) {
+    return true;
+  }
+
+  return getSeriesFilterKey(value) === getSeriesFilterKey(selected);
+}
+
+function normalizeSeriesOptions(entries: LibraryFilterData["series"]) {
+  const deduped = new Map<string, LibraryFilterData["series"][number]>();
+
+  for (const entry of entries) {
+    const canonicalName = stripSeriesSuffix(entry.name);
+    const canonicalId = getSeriesFilterKey(entry.name) || normalizeValue(entry.id) || normalizeValue(entry.name);
+
+    if (!canonicalName || !canonicalId || deduped.has(canonicalId)) {
+      continue;
+    }
+
+    deduped.set(canonicalId, {
+      id: canonicalId,
+      name: canonicalName,
+    });
+  }
+
+  return [...deduped.values()].sort((left, right) => compareByLabel(left.name, right.name));
+}
+
 function deriveFilterData(items: LibraryItemMinified[]) {
   const authors = new Map<string, string>();
   const series = new Map<string, string>();
@@ -105,7 +187,12 @@ function deriveFilterData(items: LibraryItemMinified[]) {
 
     const seriesName = entry.media.metadata.seriesName?.trim();
     if (seriesName) {
-      series.set(normalizeValue(seriesName), seriesName);
+      const canonicalSeriesName = stripSeriesSuffix(seriesName);
+      const canonicalSeriesKey = getSeriesFilterKey(seriesName);
+
+      if (canonicalSeriesName && canonicalSeriesKey) {
+        series.set(canonicalSeriesKey, canonicalSeriesName);
+      }
     }
 
     for (const genre of entry.media.metadata.genres ?? []) {
@@ -150,9 +237,11 @@ function normalizeFilterData(payload: Partial<LibraryFilterData> | null | undefi
     ),
     genres: (payload?.genres ?? []).filter((entry): entry is string => typeof entry === "string"),
     tags: (payload?.tags ?? []).filter((entry): entry is string => typeof entry === "string"),
-    series: (payload?.series ?? []).filter(
-      (entry): entry is LibraryFilterData["series"][number] =>
-        Boolean(entry && typeof entry.id === "string" && typeof entry.name === "string"),
+    series: normalizeSeriesOptions(
+      (payload?.series ?? []).filter(
+        (entry): entry is LibraryFilterData["series"][number] =>
+          Boolean(entry && typeof entry.id === "string" && typeof entry.name === "string"),
+      ),
     ),
     narrators: (payload?.narrators ?? []).filter((entry): entry is string => typeof entry === "string"),
     languages: (payload?.languages ?? []).filter((entry): entry is string => typeof entry === "string"),
@@ -424,9 +513,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
         (entry.media.tags ?? []).some((tag) => normalizeValue(tag) === normalizeValue(browseFilters.tag));
       const matchesAuthor = matchesDelimitedValue(entry.media.metadata.authorName, browseFilters.author);
       const matchesNarrator = matchesDelimitedValue(entry.media.metadata.narratorName, browseFilters.narrator);
-      const matchesSeries =
-        !browseFilters.series ||
-        normalizeValue(entry.media.metadata.seriesName) === normalizeValue(browseFilters.series);
+      const matchesSeries = matchesSeriesValue(entry.media.metadata.seriesName, browseFilters.series);
       const matchesLanguage =
         !browseFilters.language ||
         normalizeValue(entry.media.metadata.language) === normalizeValue(browseFilters.language);

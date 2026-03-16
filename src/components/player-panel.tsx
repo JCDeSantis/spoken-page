@@ -38,6 +38,7 @@ type FullscreenPanelElement = HTMLElement & {
 
 const AUTO_SYNC_INTERVAL_MS = 20000;
 const AUTO_SYNC_MIN_PROGRESS_SECONDS = 5;
+const STATUS_MESSAGE_DURATION_MS = 5000;
 const PLAY_INTERRUPTED_PATTERNS = [
   "the play() request was interrupted",
   "interrupted by a call to pause()",
@@ -137,6 +138,26 @@ function getChapterAtTime(chapters: Chapter[] | undefined, time: number) {
   }
 
   return chapters[0];
+}
+
+function getChapterIndexAtTime(chapters: Chapter[] | undefined, time: number) {
+  if (!chapters?.length) {
+    return -1;
+  }
+
+  for (let index = 0; index < chapters.length; index += 1) {
+    const chapter = chapters[index];
+
+    if (time >= chapter.start && time < chapter.end) {
+      return index;
+    }
+  }
+
+  if (time >= chapters[chapters.length - 1].start) {
+    return chapters.length - 1;
+  }
+
+  return 0;
 }
 
 function parseSrtTimestamp(value: string) {
@@ -245,6 +266,11 @@ function formatChapterLabel(title: string | undefined) {
   return `Chapter ${Number(match[1])}`;
 }
 
+function getChapterTitle(chapter: Chapter, index: number) {
+  const trimmed = chapter.title.trim();
+  return trimmed || `Chapter ${index + 1}`;
+}
+
 function useEventCallback<Args extends unknown[], ReturnValue>(
   callback: (...args: Args) => ReturnValue,
 ) {
@@ -295,7 +321,7 @@ export function PlayerPanel({
   const [playerError, setPlayerError] = useState<string | null>(null);
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
   const [subtitleSourceLabel, setSubtitleSourceLabel] = useState("No subtitle file loaded");
-  const [subtitleStatus, setSubtitleStatus] = useState("Choose a subtitle file to begin.");
+  const [subtitleStatus, setSubtitleStatus] = useState<string | null>(null);
   const [subtitleError, setSubtitleError] = useState<string | null>(null);
   const [subtitleOffset, setSubtitleOffset] = useState(0);
   const [selectedServerSubtitleId, setSelectedServerSubtitleId] = useState("");
@@ -303,8 +329,10 @@ export function PlayerPanel({
   const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
   const [isInlineFullscreen, setIsInlineFullscreen] = useState(false);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
+  const [isChapterListOpen, setIsChapterListOpen] = useState(false);
 
   const serverSubtitleFiles = useMemo(() => listSubtitleFiles(item), [item]);
+  const chapters = item?.media.chapters ?? [];
   const tracks = useMemo(
     () => (session?.audioTracks?.length ? session.audioTracks : item?.media.tracks ?? []),
     [item, session],
@@ -319,12 +347,19 @@ export function PlayerPanel({
     () => getSubtitleCueAtTime(subtitleCues, currentTime + subtitleOffset),
     [currentTime, subtitleCues, subtitleOffset],
   );
+  const activeChapterIndex = useMemo(
+    () => getChapterIndexAtTime(chapters, currentTime),
+    [chapters, currentTime],
+  );
   const progressValue = totalDuration > 0 ? Math.min(currentTime / totalDuration, 1) : 0;
   const isDock = variant === "dock";
+  const hasActiveSession = Boolean(session?.id);
   const hasLoadedSubtitles = subtitleCues.length > 0;
   const isFullscreen = isBrowserFullscreen || isInlineFullscreen;
   const shouldShowLyricsStage = !isDock || focusMode || isFullscreen || hasPlaybackStarted;
   const chapterLabel = useMemo(() => formatChapterLabel(activeChapter?.title), [activeChapter?.title]);
+  const hasPreviousChapter = activeChapterIndex > 0;
+  const hasNextChapter = activeChapterIndex >= 0 && activeChapterIndex < chapters.length - 1;
 
   useEffect(() => {
     itemRef.current = item;
@@ -393,6 +428,44 @@ export function PlayerPanel({
       onInlineFullscreenChange?.(false);
     };
   }, [isInlineFullscreen, onInlineFullscreenChange]);
+
+  useEffect(() => {
+    setIsChapterListOpen(false);
+  }, [item?.id]);
+
+  useEffect(() => {
+    if (!chapters.length) {
+      setIsChapterListOpen(false);
+    }
+  }, [chapters.length]);
+
+  useEffect(() => {
+    if (!playerStatus) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setPlayerStatus((current) => (current === playerStatus ? null : current));
+    }, STATUS_MESSAGE_DURATION_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [playerStatus]);
+
+  useEffect(() => {
+    if (!subtitleStatus) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setSubtitleStatus((current) => (current === subtitleStatus ? null : current));
+    }, STATUS_MESSAGE_DURATION_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [subtitleStatus]);
 
   const pauseListeningClock = useEventCallback(() => {
     if (listenWindowStartRef.current !== null) {
@@ -568,7 +641,7 @@ export function PlayerPanel({
       const targetItem = options?.targetItem ?? itemRef.current;
       const targetSession = options?.targetSession ?? sessionRef.current;
 
-      if (!targetItem) {
+      if (!targetItem || !targetSession?.id) {
         return false;
       }
 
@@ -591,32 +664,30 @@ export function PlayerPanel({
       }
 
       try {
-        if (targetSession) {
-          const sessionResponse = await fetch(`/api/session/${targetSession.id}/${mode}`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              currentTime: nextTime,
-              timeListened,
-              duration,
-            }),
-          });
-          const sessionPayload = (await sessionResponse.json()) as {
-            ok?: boolean;
-            error?: string;
-            session?: PlaybackSession | null;
-          };
+        const sessionResponse = await fetch(`/api/session/${targetSession.id}/${mode}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            currentTime: nextTime,
+            timeListened,
+            duration,
+          }),
+        });
+        const sessionPayload = (await sessionResponse.json()) as {
+          ok?: boolean;
+          error?: string;
+          session?: PlaybackSession | null;
+        };
 
-          if (!sessionResponse.ok) {
-            throw new Error(sessionPayload.error ?? "Unable to sync the Audiobookshelf session.");
-          }
+        if (!sessionResponse.ok) {
+          throw new Error(sessionPayload.error ?? "Unable to sync the Audiobookshelf session.");
+        }
 
-          if (sessionPayload.session?.id) {
-            setSession(sessionPayload.session);
-            sessionRef.current = sessionPayload.session;
-          }
+        if (sessionPayload.session?.id) {
+          setSession(sessionPayload.session);
+          sessionRef.current = sessionPayload.session;
         }
 
         const progressResponse = await fetch(`/api/me/progress/${targetItem.id}`, {
@@ -852,7 +923,7 @@ export function PlayerPanel({
 
     if (!item) {
       setSubtitleSourceLabel("No subtitle file loaded");
-      setSubtitleStatus("Choose a book to start reading along.");
+      setSubtitleStatus(null);
       return;
     }
 
@@ -866,7 +937,7 @@ export function PlayerPanel({
     }
 
     setSubtitleSourceLabel("No subtitle file loaded");
-    setSubtitleStatus("Choose an .srt file or attach one from Audiobookshelf.");
+    setSubtitleStatus(null);
   }, [exitFullscreenSafely, item?.id]);
 
   useEffect(() => {
@@ -1060,6 +1131,35 @@ export function PlayerPanel({
 
   function handleRelativeSeek(delta: number) {
     queueTrackLoad(currentTimeRef.current + delta, Boolean(sessionRef.current) && isPlayingRef.current);
+  }
+
+  function handleChapterJump(chapter: Chapter, index: number) {
+    queueTrackLoad(chapter.start, Boolean(sessionRef.current) && isPlayingRef.current);
+    setIsChapterListOpen(false);
+    setPlayerStatus(`Jumped to ${getChapterTitle(chapter, index)}.`);
+  }
+
+  function handleChapterStep(direction: "previous" | "next") {
+    if (!chapters.length || activeChapterIndex < 0) {
+      return;
+    }
+
+    const nextIndex =
+      direction === "previous"
+        ? Math.max(activeChapterIndex - 1, 0)
+        : Math.min(activeChapterIndex + 1, chapters.length - 1);
+
+    if (nextIndex === activeChapterIndex) {
+      return;
+    }
+
+    const targetChapter = chapters[nextIndex];
+
+    if (!targetChapter) {
+      return;
+    }
+
+    handleChapterJump(targetChapter, nextIndex);
   }
 
   function handleLoadedMetadata() {
@@ -1282,7 +1382,7 @@ export function PlayerPanel({
   }
 
   function renderTransport() {
-    const primaryLabel = !session ? "Start" : isPlaying ? "Pause" : "Play";
+    const primaryLabel = !session ? "Start playback" : isPlaying ? "Pause playback" : "Resume playback";
     const fullscreenLabel = isFullscreen ? "Exit full screen" : "Enter full screen";
     const volumePercent = Math.round(volume * 100);
 
@@ -1296,7 +1396,17 @@ export function PlayerPanel({
               <span>{formatTime(totalDuration)}</span>
             </div>
 
-            {chapterLabel ? <span className="chapter-pill">{chapterLabel}</span> : null}
+            {chapterLabel ? (
+              <button
+                className={`chapter-pill chapter-pill-button ${
+                  isChapterListOpen ? "chapter-pill-button-active" : ""
+                }`.trim()}
+                onClick={() => setIsChapterListOpen((current) => !current)}
+                type="button"
+              >
+                {chapterLabel}
+              </button>
+            ) : null}
           </div>
 
           <div className="transport-settings">
@@ -1346,30 +1456,87 @@ export function PlayerPanel({
 
         <div className="transport-controls">
           <div className="transport-controls-main">
-            <button className="button button-secondary" onClick={() => handleRelativeSeek(-15)} type="button">
-              Back 15s
+            <button
+              aria-label="Previous chapter"
+              className="icon-button transport-action-button transport-chapter-button"
+              disabled={!hasPreviousChapter}
+              onClick={() => handleChapterStep("previous")}
+              title="Previous chapter"
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20">
+                <path d="M6 4v12" />
+                <path d="M14 5l-6 5 6 5" />
+              </svg>
             </button>
 
             <button
-              className="button button-primary"
+              aria-label="Back 15 seconds"
+              className="icon-button transport-action-button"
+              onClick={() => handleRelativeSeek(-15)}
+              title="Back 15 seconds"
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20">
+                <path d="M11 5l-5 5 5 5" />
+                <path d="M16 5l-5 5 5 5" />
+              </svg>
+            </button>
+
+            <button
+              aria-label={primaryLabel}
+              className="icon-button transport-action-button"
               disabled={busyAction === "starting"}
               onClick={() => {
                 void handlePrimaryTransport();
               }}
+              title={busyAction === "starting" ? "Starting playback" : primaryLabel}
               type="button"
             >
-              {busyAction === "starting" ? "Starting..." : primaryLabel}
+              {isPlaying ? (
+                <svg aria-hidden="true" viewBox="0 0 20 20">
+                  <path d="M8 5v10" />
+                  <path d="M12 5v10" />
+                </svg>
+              ) : (
+                <svg aria-hidden="true" viewBox="0 0 20 20">
+                  <path d="M7 5.5l7 4.5-7 4.5z" />
+                </svg>
+              )}
             </button>
 
-            <button className="button button-secondary" onClick={() => handleRelativeSeek(30)} type="button">
-              Forward 30s
+            <button
+              aria-label="Forward 30 seconds"
+              className="icon-button transport-action-button"
+              onClick={() => handleRelativeSeek(30)}
+              title="Forward 30 seconds"
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20">
+                <path d="M9 5l5 5-5 5" />
+                <path d="M4 5l5 5-5 5" />
+              </svg>
+            </button>
+
+            <button
+              aria-label="Next chapter"
+              className="icon-button transport-action-button transport-chapter-button"
+              disabled={!hasNextChapter}
+              onClick={() => handleChapterStep("next")}
+              title="Next chapter"
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20">
+                <path d="M14 4v12" />
+                <path d="M6 5l6 5-6 5" />
+              </svg>
             </button>
           </div>
 
           <div className="transport-controls-side">
             <button
               aria-label={fullscreenLabel}
-              className="icon-button fullscreen-button"
+              className="icon-button transport-action-button fullscreen-button"
               onClick={() => {
                 void toggleFullscreen();
               }}
@@ -1386,6 +1553,44 @@ export function PlayerPanel({
           </div>
         </div>
 
+        {isChapterListOpen && chapters.length ? (
+          <section className="chapter-picker">
+            <div className="chapter-picker-head">
+              <div>
+                <p className="eyebrow">Chapter List</p>
+                <h3>Jump to chapter</h3>
+              </div>
+
+              <button
+                className="button button-secondary button-compact"
+                onClick={() => setIsChapterListOpen(false)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="chapter-list" role="list">
+              {chapters.map((chapter, index) => {
+                const isActiveChapter = index === activeChapterIndex;
+
+                return (
+                  <button
+                    aria-current={isActiveChapter ? "true" : undefined}
+                    className={`chapter-option ${isActiveChapter ? "chapter-option-active" : ""}`.trim()}
+                    key={chapter.id ?? `${chapter.start}-${chapter.end}-${index}`}
+                    onClick={() => handleChapterJump(chapter, index)}
+                    type="button"
+                  >
+                    <span className="chapter-option-title">{getChapterTitle(chapter, index)}</span>
+                    <span className="chapter-option-meta">{formatTime(chapter.start)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+
         <div className="transport-meta">
           <span>{item?.media.metadata.title ?? "Waiting for audiobook"}</span>
           <span>{Math.round(progressValue * 100)}% complete</span>
@@ -1396,8 +1601,10 @@ export function PlayerPanel({
 
   function renderFooterMeta() {
     const shouldShowSubtitleMeta = shouldShowLyricsStage;
+    const footerNotice = playerError ?? subtitleError ?? playerStatus ?? subtitleStatus;
+    const footerNoticeIsError = Boolean(playerError || subtitleError);
 
-    if (!shouldShowSubtitleMeta && !playerStatus && !playerError && !(isDock && onHide)) {
+    if (!shouldShowSubtitleMeta && !footerNotice && !(isDock && onHide)) {
       return null;
     }
 
@@ -1405,12 +1612,16 @@ export function PlayerPanel({
       <section className="player-footer">
         <div className={`player-footer-row ${shouldShowSubtitleMeta ? "" : "player-footer-row-end"}`.trim()}>
           {shouldShowSubtitleMeta ? (
-            <div className="player-footer-copy">
-              <div className="subtitle-header">
-                <span>Read-along subtitles</span>
-                <span>{subtitleSourceLabel}</span>
-              </div>
-              <p className="subtitle-status">{subtitleStatus}</p>
+            <div className="player-footer-notice" aria-live="polite">
+              {footerNotice ? (
+                <p className={`status-message ${footerNoticeIsError ? "status-error" : ""}`.trim()}>
+                  {footerNotice}
+                </p>
+              ) : (
+                <p aria-hidden="true" className="status-message player-footer-placeholder">
+                  .
+                </p>
+              )}
             </div>
           ) : null}
 
@@ -1420,10 +1631,6 @@ export function PlayerPanel({
             </button>
           ) : null}
         </div>
-
-        {subtitleError ? <p className="status-message status-error">{subtitleError}</p> : null}
-        {playerStatus ? <p className="status-message">{playerStatus}</p> : null}
-        {playerError ? <p className="status-message status-error">{playerError}</p> : null}
       </section>
     );
   }
@@ -1455,7 +1662,7 @@ export function PlayerPanel({
 
         <button
           className="button button-secondary"
-          disabled={busyAction === "syncing"}
+          disabled={busyAction === "syncing" || !hasActiveSession}
           onClick={() => {
             void syncToAudiobookshelf("sync", { refreshItem: true });
           }}
