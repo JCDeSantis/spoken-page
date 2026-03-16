@@ -357,6 +357,7 @@ export function PlayerPanel({
   const hasLoadedSubtitles = subtitleCues.length > 0;
   const isFullscreen = isBrowserFullscreen || isInlineFullscreen;
   const shouldShowLyricsStage = !isDock || focusMode || isFullscreen || hasPlaybackStarted;
+  const shouldShowLoadedSubtitlePrompt = hasLoadedSubtitles && !hasPlaybackStarted;
   const chapterLabel = useMemo(() => formatChapterLabel(activeChapter?.title), [activeChapter?.title]);
   const hasPreviousChapter = activeChapterIndex > 0;
   const hasNextChapter = activeChapterIndex >= 0 && activeChapterIndex < chapters.length - 1;
@@ -1759,9 +1760,9 @@ export function PlayerPanel({
         {shouldShowLyricsStage ? (
           <>
             <article className={`subtitle-card ${hasLoadedSubtitles ? "" : "subtitle-card-empty"}`}>
-              {hasLoadedSubtitles ? (
+              {hasLoadedSubtitles && !shouldShowLoadedSubtitlePrompt ? (
                 <p className="subtitle-active">
-                  {activeSubtitle?.text ?? "Subtitles will appear here once playback reaches a cue."}
+                  {activeSubtitle?.text ?? "\u00A0"}
                 </p>
               ) : (
                 renderSubtitlePrompt()
