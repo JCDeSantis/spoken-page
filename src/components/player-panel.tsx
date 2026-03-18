@@ -52,6 +52,7 @@ type NavigatorWithWakeLock = Navigator & {
 const AUTO_SYNC_INTERVAL_MS = 20000;
 const AUTO_SYNC_MIN_PROGRESS_SECONDS = 5;
 const STATUS_MESSAGE_DURATION_MS = 5000;
+const TIME_DISPLAY_MODE_STORAGE_KEY = "spoken-page-time-display-mode";
 const PLAY_INTERRUPTED_PATTERNS = [
   "the play() request was interrupted",
   "interrupted by a call to pause()",
@@ -332,6 +333,7 @@ export function PlayerPanel({
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [volume, setVolume] = useState(1);
+  const [timeDisplayMode, setTimeDisplayMode] = useState<"elapsed" | "remaining">("elapsed");
   const [busyAction, setBusyAction] = useState<"starting" | "syncing" | "refreshing" | null>(null);
   const [playerStatus, setPlayerStatus] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
@@ -406,6 +408,15 @@ export function PlayerPanel({
   useEffect(() => {
     playbackRateRef.current = playbackRate;
   }, [playbackRate]);
+
+  useEffect(() => {
+    const savedMode = window.localStorage.getItem(TIME_DISPLAY_MODE_STORAGE_KEY);
+    setTimeDisplayMode(savedMode === "remaining" ? "remaining" : "elapsed");
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(TIME_DISPLAY_MODE_STORAGE_KEY, timeDisplayMode);
+  }, [timeDisplayMode]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -1517,16 +1528,29 @@ export function PlayerPanel({
     const primaryLabel = !session ? "Start playback" : isPlaying ? "Pause playback" : "Resume playback";
     const fullscreenLabel = isFullscreen ? "Exit full screen" : "Enter full screen";
     const volumePercent = Math.round(volume * 100);
+    const timeModeLabel = timeDisplayMode === "remaining" ? "Show elapsed time" : "Show remaining time";
+    const timelineDisplay =
+      timeDisplayMode === "remaining"
+        ? `-${formatTime(Math.max(totalDuration - currentTime, 0))}`
+        : formatTime(currentTime);
 
     return (
       <section className="transport">
         <div className="transport-topline">
           <div className="transport-timeline">
-            <div className="progress-pill">
-              <span>{formatTime(currentTime)}</span>
+            <button
+              aria-label={timeModeLabel}
+              className="progress-pill progress-pill-button"
+              onClick={() =>
+                setTimeDisplayMode((current) => (current === "elapsed" ? "remaining" : "elapsed"))
+              }
+              title={timeModeLabel}
+              type="button"
+            >
+              <span>{timelineDisplay}</span>
               <span>/</span>
               <span>{formatTime(totalDuration)}</span>
-            </div>
+            </button>
 
             {chapterLabel ? (
               <button
@@ -1667,6 +1691,20 @@ export function PlayerPanel({
 
           <div className="transport-controls-side">
             <button
+              aria-label="Pop out player"
+              className="icon-button transport-action-button fullscreen-button"
+              onClick={openPopout}
+              title="Pop out player"
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20">
+                <path d="M11 4h5v5" />
+                <path d="M10 10l6-6" />
+                <path d="M8 4H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-3" />
+              </svg>
+            </button>
+
+            <button
               aria-label={fullscreenLabel}
               className="icon-button transport-action-button fullscreen-button"
               onClick={() => {
@@ -1687,21 +1725,6 @@ export function PlayerPanel({
 
         {isChapterListOpen && chapters.length ? (
           <section className="chapter-picker">
-            <div className="chapter-picker-head">
-              <div>
-                <p className="eyebrow">Chapter List</p>
-                <h3>Jump to chapter</h3>
-              </div>
-
-              <button
-                className="button button-secondary button-compact"
-                onClick={() => setIsChapterListOpen(false)}
-                type="button"
-              >
-                Close
-              </button>
-            </div>
-
             <div className="chapter-list" role="list">
               {chapters.map((chapter, index) => {
                 const isActiveChapter = index === activeChapterIndex;
@@ -1803,9 +1826,6 @@ export function PlayerPanel({
           Force sync to Audiobookshelf
         </button>
 
-        <button className="button button-secondary" onClick={openPopout} type="button">
-          Pop out player
-        </button>
       </div>
     );
   }
