@@ -370,8 +370,21 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   }
 
   async function disconnect() {
+    const shouldDisconnect = window.confirm(
+      "Disconnect from this Audiobookshelf server? You can reconnect at any time with your API token.",
+    );
+
+    if (!shouldDisconnect) {
+      return;
+    }
+
     await fetch("/api/connection", { method: "DELETE" });
     window.location.reload();
+  }
+
+  function clearBrowseSearchAndFilters() {
+    setFilter("");
+    setBrowseFilters({ ...EMPTY_BROWSE_FILTERS });
   }
 
   function rememberRecent(itemId: string) {
@@ -718,6 +731,15 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
               />
             </label>
 
+            <button
+              className="button button-secondary library-clear-button"
+              disabled={!filter && activeFilterCount === 0}
+              onClick={clearBrowseSearchAndFilters}
+              type="button"
+            >
+              Clear
+            </button>
+
             <details className="library-filter-dropdown">
               <summary>
                 <span className="library-filter-summary-label">
@@ -739,7 +761,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
                   <button
                     className="button button-secondary button-compact"
                     disabled={activeFilterCount === 0}
-                    onClick={() => setBrowseFilters({ ...EMPTY_BROWSE_FILTERS })}
+                    onClick={clearBrowseSearchAndFilters}
                     type="button"
                   >
                     Clear all

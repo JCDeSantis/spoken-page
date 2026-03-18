@@ -675,7 +675,7 @@ img {
 
 .all-books-searchbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 0.75rem;
   align-items: end;
   margin-bottom: 0.85rem;
@@ -689,6 +689,12 @@ img {
 
 .all-books-searchbar .library-search {
   min-height: 3.75rem;
+}
+
+.library-clear-button {
+  min-height: var(--control-height);
+  align-self: stretch;
+  white-space: nowrap;
 }
 
 .library-filter-dropdown {
