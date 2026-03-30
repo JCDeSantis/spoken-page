@@ -5,10 +5,12 @@ type RouteContext = {
   params: Promise<{ itemId: string }>;
 };
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const { itemId } = await context.params;
-    const upstream = await absFetch(`/api/items/${itemId}/cover`);
+    const upstream = await absFetch(`/api/items/${itemId}/cover`, {
+      signal: request.signal,
+    });
 
     return new NextResponse(upstream.body, {
       status: upstream.status,

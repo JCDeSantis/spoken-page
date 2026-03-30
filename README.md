@@ -1,6 +1,6 @@
 # Spoken Page
 
-![Version](https://img.shields.io/badge/version-v1.0-ff5664?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-v1.0.1-ff5664?style=for-the-badge)
 
 ![Spoken Page logo](public/spoken-page-logo-trimmed.png)
 

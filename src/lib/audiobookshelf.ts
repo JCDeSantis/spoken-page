@@ -12,7 +12,7 @@ import {
 const CONNECTION_COOKIE = "abs_sync_connection";
 const CONNECTION_COOKIE_VERSION = 1;
 const APP_CLIENT_NAME = "Spoken Page";
-const APP_CLIENT_VERSION = "1.0.0";
+const APP_CLIENT_VERSION = "1.0.1";
 const CONNECTION_SECRET_ENV = "SPOKEN_PAGE_SECRET";
 const LOCKED_BASE_URL_ENV = "SPOKEN_PAGE_ABS_BASE_URL";
 const ALLOWED_BASE_URLS_ENV = "SPOKEN_PAGE_ALLOWED_BASE_URLS";
@@ -438,10 +438,12 @@ export async function getLibraryItem(itemId: string, connection?: Audiobookshelf
   });
 }
 
-export async function getLibraryItemFile(itemId: string, fileId: string, connection?: AudiobookshelfConnection) {
-  return absFetch(`/api/items/${itemId}/file/${encodeURIComponent(fileId)}/download`, {
-    connection,
-  });
+export async function getLibraryItemFile(
+  itemId: string,
+  fileId: string,
+  init: FetchInit = {},
+) {
+  return absFetch(`/api/items/${itemId}/file/${encodeURIComponent(fileId)}/download`, init);
 }
 
 export async function startPlaybackSession(itemId: string, connection?: AudiobookshelfConnection) {

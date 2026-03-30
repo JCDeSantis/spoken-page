@@ -13,10 +13,12 @@ const FORWARDED_HEADERS = [
   "last-modified",
 ] as const;
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const { itemId, fileId } = await context.params;
-    const upstream = await getLibraryItemFile(itemId, fileId);
+    const upstream = await getLibraryItemFile(itemId, fileId, {
+      signal: request.signal,
+    });
     const responseHeaders = new Headers();
 
     for (const headerName of FORWARDED_HEADERS) {

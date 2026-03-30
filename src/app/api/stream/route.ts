@@ -26,7 +26,10 @@ export async function GET(request: NextRequest) {
       headers.set("Range", range);
     }
 
-    const upstream = await absFetch(relativePath, { headers });
+    const upstream = await absFetch(relativePath, {
+      headers,
+      signal: request.signal,
+    });
     const responseHeaders = new Headers();
 
     for (const headerName of FORWARDED_RESPONSE_HEADERS) {
