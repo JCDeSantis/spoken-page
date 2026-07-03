@@ -1,5 +1,6 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { APP_VERSION } from "@/lib/app-version";
 import { cookies } from "next/headers";
+import { createSession, deleteSession, readSession, updateSession } from "@/lib/session-store";
 import {
   AuthorizedSummary,
   LibraryFilterData,
@@ -9,21 +10,32 @@ import {
   PlaybackSession,
 } from "@/lib/types";
 
-const CONNECTION_COOKIE = "abs_sync_connection";
-const CONNECTION_COOKIE_VERSION = 1;
+const SESSION_COOKIE = "spoken_page_session";
+const LEGACY_CONNECTION_COOKIE = "abs_sync_connection";
 const APP_CLIENT_NAME = "Spoken Page";
-const APP_CLIENT_VERSION = "1.0.2";
+const APP_CLIENT_VERSION = APP_VERSION;
 const CONNECTION_SECRET_ENV = "SPOKEN_PAGE_SECRET";
 const LOCKED_BASE_URL_ENV = "SPOKEN_PAGE_ABS_BASE_URL";
 const ALLOWED_BASE_URLS_ENV = "SPOKEN_PAGE_ALLOWED_BASE_URLS";
 const UNSAFE_CUSTOM_CONNECTIONS_ENV = "SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS";
 
-let generatedConnectionSecret: string | null = null;
+const UPSTREAM_TIMEOUT_MS = 15_000;
+
+export type AudiobookshelfErrorKind = "unauthorized" | "not_found" | "timeout" | "connection" | "upstream" | "invalid_response";
+export class AudiobookshelfError extends Error {
+  constructor(message: string, public readonly kind: AudiobookshelfErrorKind, public readonly upstreamStatus?: number) {
+    super(message);
+    this.name = "AudiobookshelfError";
+  }
+}
 
 export type AudiobookshelfConnection = {
   baseUrl: string;
   token: string;
   deviceId: string;
+  userId?: string;
+  refreshToken?: string;
+  sessionId?: string;
 };
 
 export type ConnectionPolicy = {
@@ -36,12 +48,7 @@ export type ConnectionPolicy = {
 
 type FetchInit = RequestInit & {
   connection?: AudiobookshelfConnection;
-};
-
-type StoredConnectionEnvelope = {
-  version: number;
-  payload: string;
-  signature: string;
+  skipAuthRefresh?: boolean;
 };
 
 function normalizeBaseUrl(value: string) {
@@ -57,21 +64,6 @@ function normalizeBaseUrl(value: string) {
   parsed.hash = "";
 
   return parsed.toString().replace(/\/$/, "");
-}
-
-function getConnectionSecret() {
-  const configuredSecret = process.env[CONNECTION_SECRET_ENV]?.trim();
-
-  if (configuredSecret) {
-    return configuredSecret;
-  }
-
-  if (process.env.NODE_ENV !== "production") {
-    return "spoken-page-dev-secret";
-  }
-
-  generatedConnectionSecret ??= randomBytes(32).toString("hex");
-  return generatedConnectionSecret;
 }
 
 function isUnsafeCustomConnectionsEnabled() {
@@ -107,18 +99,18 @@ export function getConnectionPolicy(): ConnectionPolicy {
     ...(lockedBaseUrl ? [lockedBaseUrl] : []),
     ...parseAllowedBaseUrls(),
   ]);
+  const secretConfigured = Boolean(process.env[CONNECTION_SECRET_ENV]?.trim());
   const requiresServerConfiguration =
     process.env.NODE_ENV === "production" &&
-    !lockedBaseUrl &&
-    allowedBaseUrls.length === 0 &&
-    !isUnsafeCustomConnectionsEnabled();
+    (!secretConfigured ||
+      (!lockedBaseUrl && allowedBaseUrls.length === 0 && !isUnsafeCustomConnectionsEnabled()));
 
   return {
     lockedBaseUrl,
     allowedBaseUrls,
     customBaseUrlEnabled: !lockedBaseUrl && !requiresServerConfiguration,
     requiresServerConfiguration,
-    secretConfigured: Boolean(process.env[CONNECTION_SECRET_ENV]?.trim()),
+    secretConfigured,
   };
 }
 
@@ -143,103 +135,51 @@ function validateConnectionBaseUrl(value: string) {
   return normalized;
 }
 
-function signConnectionPayload(payload: string) {
-  return createHmac("sha256", getConnectionSecret()).update(payload).digest("base64url");
-}
-
-function verifyConnectionSignature(payload: string, signature: string) {
-  const expectedSignature = signConnectionPayload(payload);
-  const expectedBuffer = Buffer.from(expectedSignature, "utf8");
-  const signatureBuffer = Buffer.from(signature, "utf8");
-
-  return (
-    expectedBuffer.length === signatureBuffer.length &&
-    timingSafeEqual(expectedBuffer, signatureBuffer)
-  );
-}
-
-function serializeConnection(connection: AudiobookshelfConnection) {
-  const payload = Buffer.from(JSON.stringify(connection), "utf8").toString("base64url");
-
-  return JSON.stringify({
-    version: CONNECTION_COOKIE_VERSION,
-    payload,
-    signature: signConnectionPayload(payload),
-  } satisfies StoredConnectionEnvelope);
-}
-
-function parseSerializedConnection(payload: string) {
-  const decoded = Buffer.from(payload, "base64url").toString("utf8");
-  const parsed = JSON.parse(decoded) as Partial<AudiobookshelfConnection>;
-
-  if (
-    typeof parsed.baseUrl !== "string" ||
-    typeof parsed.token !== "string" ||
-    typeof parsed.deviceId !== "string"
-  ) {
-    return null;
-  }
-
-  return {
-    baseUrl: validateConnectionBaseUrl(parsed.baseUrl),
-    token: parsed.token,
-    deviceId: parsed.deviceId,
-  } satisfies AudiobookshelfConnection;
-}
-
-function parseConnection(rawValue: string | undefined) {
-  if (!rawValue) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawValue) as Partial<StoredConnectionEnvelope>;
-
-    if (
-      parsed.version !== CONNECTION_COOKIE_VERSION ||
-      typeof parsed.payload !== "string" ||
-      typeof parsed.signature !== "string" ||
-      !verifyConnectionSignature(parsed.payload, parsed.signature)
-    ) {
-      return null;
-    }
-
-    return parseSerializedConnection(parsed.payload);
-  } catch {
-    return null;
-  }
-}
-
 export async function getConnection() {
   const store = await cookies();
-  return parseConnection(store.get(CONNECTION_COOKIE)?.value);
+  const sessionId = store.get(SESSION_COOKIE)?.value;
+  if (!sessionId) return null;
+  const connection = await readSession(sessionId);
+  if (!connection) return null;
+  return { ...connection, baseUrl: validateConnectionBaseUrl(connection.baseUrl), sessionId };
 }
 
 export async function setConnection(connection: AudiobookshelfConnection) {
   const store = await cookies();
-  store.set(CONNECTION_COOKIE, serializeConnection(connection), {
+  const existingSessionId = store.get(SESSION_COOKIE)?.value;
+  const session = await createSession(connection);
+  if (existingSessionId) await deleteSession(existingSessionId);
+  store.set(SESSION_COOKIE, session.sessionId, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30,
+    maxAge: session.maxAgeSeconds,
   });
+  store.delete(LEGACY_CONNECTION_COOKIE);
 }
 
 export async function clearConnection() {
   const store = await cookies();
-  store.delete(CONNECTION_COOKIE);
+  const sessionId = store.get(SESSION_COOKIE)?.value;
+  if (sessionId) await deleteSession(sessionId);
+  store.delete(SESSION_COOKIE);
+  store.delete(LEGACY_CONNECTION_COOKIE);
+}
+
+export function sanitizeLoginInput(baseUrl: string, username: string, password: string) {
+  if (process.env.NODE_ENV === "production" && !getConnectionPolicy().secretConfigured) {
+    throw new Error(`${CONNECTION_SECRET_ENV} must be configured before users can sign in.`);
+  }
+  if (!baseUrl.trim()) throw new Error("Audiobookshelf server URL is required.");
+  if (!username.trim()) throw new Error("Username is required.");
+  if (username.length > 200 || password.length > 1024) throw new Error("Login details are too long.");
+  return { baseUrl: validateConnectionBaseUrl(baseUrl), username: username.trim(), password };
 }
 
 export function sanitizeConnectionInput(baseUrl: string, token: string) {
-  if (!baseUrl.trim() || !token.trim()) {
-    throw new Error("Server URL and API token are required.");
-  }
-
-  return {
-    baseUrl: validateConnectionBaseUrl(baseUrl),
-    token: token.trim(),
-  };
+  if (!baseUrl.trim() || !token.trim()) throw new Error("Server URL and API token are required.");
+  return { baseUrl: validateConnectionBaseUrl(baseUrl), token: token.trim() };
 }
 
 function withBasePath(serverUrl: URL, path: string) {
@@ -292,7 +232,7 @@ async function getRequiredConnection(explicit?: AudiobookshelfConnection) {
   const connection = explicit ?? (await getConnection());
 
   if (!connection) {
-    throw new Error("Connect to your Audiobookshelf server first.");
+    throw new AudiobookshelfError("Connect to your Audiobookshelf server first.", "unauthorized");
   }
 
   return connection;
@@ -323,6 +263,32 @@ function formatUpstreamError(response: Response, url: string, text: string) {
   return `Audiobookshelf request failed with ${statusLabel}.`;
 }
 
+async function refreshAudiobookshelfConnection(connection: AudiobookshelfConnection) {
+  if (!connection.refreshToken) return null;
+  const response = await fetch(resolveServerUrl(connection.baseUrl, "/auth/refresh"), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "x-refresh-token": connection.refreshToken,
+    },
+    cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as {
+    user?: { accessToken?: string; refreshToken?: string };
+  };
+  if (typeof payload.user?.accessToken !== "string") return null;
+  const refreshed = {
+    ...connection,
+    token: payload.user.accessToken,
+    refreshToken: payload.user.refreshToken ?? connection.refreshToken,
+  };
+  if (connection.sessionId) await updateSession(connection.sessionId, refreshed);
+  return refreshed;
+}
+
 export async function absFetch(path: string, init: FetchInit = {}) {
   const connection = await getRequiredConnection(init.connection);
   const url = resolveServerUrl(connection.baseUrl, path);
@@ -334,11 +300,27 @@ export async function absFetch(path: string, init: FetchInit = {}) {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(url, {
-    ...init,
-    headers,
-    cache: "no-store",
-  });
+  const startedAt = Date.now();
+  const timeoutSignal = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, headers, cache: "no-store", signal });
+  } catch (error) {
+    const timedOut = timeoutSignal.aborted && !init.signal?.aborted;
+    throw new AudiobookshelfError(timedOut ? "Audiobookshelf did not respond in time." : "Could not reach Audiobookshelf.", timedOut ? "timeout" : "connection");
+  } finally {
+    console.info(JSON.stringify({ level: "info", event: "abs_request", method: init.method ?? "GET", path: new URL(url).pathname, durationMs: Date.now() - startedAt }));
+  }
+
+  if (response.status === 401 && !init.skipAuthRefresh) {
+    try {
+      const refreshed = await refreshAudiobookshelfConnection(connection);
+      if (refreshed) return absFetch(path, { ...init, connection: refreshed, skipAuthRefresh: true });
+    } catch {
+      // Fall through to the original authorization error.
+    }
+  }
 
   if (!response.ok) {
     let message = `Audiobookshelf request failed with status ${response.status}.`;
@@ -358,7 +340,8 @@ export async function absFetch(path: string, init: FetchInit = {}) {
       // Ignore secondary parse failures and keep the fallback message.
     }
 
-    throw new Error(message);
+    const kind = response.status === 401 || response.status === 403 ? "unauthorized" : response.status === 404 ? "not_found" : "upstream";
+    throw new AudiobookshelfError(message, kind, response.status);
   }
 
   return response;
@@ -366,7 +349,8 @@ export async function absFetch(path: string, init: FetchInit = {}) {
 
 export async function absJson<T>(path: string, init: FetchInit = {}) {
   const response = await absFetch(path, init);
-  return (await response.json()) as T;
+  try { return (await response.json()) as T; }
+  catch { throw new AudiobookshelfError("Audiobookshelf returned an invalid JSON response.", "invalid_response", response.status); }
 }
 
 export async function absOptionalJson<T>(path: string, init: FetchInit = {}) {
@@ -380,9 +364,89 @@ export async function absOptionalJson<T>(path: string, init: FetchInit = {}) {
   return (await response.json()) as T;
 }
 
+export async function loginToAudiobookshelf(baseUrl: string, username: string, password: string) {
+  const sanitized = sanitizeLoginInput(baseUrl, username, password);
+  const url = resolveServerUrl(sanitized.baseUrl, "/login");
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "x-return-tokens": "true",
+      },
+      body: JSON.stringify({ username: sanitized.username, password: sanitized.password }),
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new AudiobookshelfError("Audiobookshelf login timed out.", "timeout");
+    }
+    throw new AudiobookshelfError("Could not reach the configured Audiobookshelf server.", "connection");
+  }
+
+  let payload: {
+    user?: {
+      id?: string;
+      username?: string;
+      type?: string;
+      token?: string;
+      accessToken?: string;
+      refreshToken?: string;
+    };
+    serverSettings?: { version?: string };
+    userDefaultLibraryId?: string;
+    error?: string;
+    message?: string;
+  };
+  try {
+    payload = (await response.json()) as typeof payload;
+  } catch {
+    throw new AudiobookshelfError("Audiobookshelf returned an invalid login response.", "invalid_response", response.status);
+  }
+  if (!response.ok) {
+    throw new AudiobookshelfError(
+      response.status === 401
+        ? "Incorrect Audiobookshelf username or password."
+        : payload.message ?? payload.error ?? "Audiobookshelf login failed.",
+      response.status === 401 || response.status === 403 ? "unauthorized" : "upstream",
+      response.status,
+    );
+  }
+  if (
+    (typeof payload.user?.accessToken !== "string" && typeof payload.user?.token !== "string") ||
+    typeof payload.user.username !== "string" ||
+    typeof payload.user.type !== "string" ||
+    typeof payload.serverSettings?.version !== "string"
+  ) {
+    throw new AudiobookshelfError("Audiobookshelf login response was missing required fields.", "invalid_response", response.status);
+  }
+
+  const userId = typeof payload.user.id === "string" ? payload.user.id : payload.user.username;
+  return {
+    connection: {
+      baseUrl: sanitized.baseUrl,
+      token: payload.user.accessToken ?? payload.user.token!,
+      refreshToken: payload.user.refreshToken,
+      deviceId: crypto.randomUUID(),
+      userId,
+    } satisfies AudiobookshelfConnection,
+    profile: {
+      userId,
+      username: payload.user.username,
+      userType: payload.user.type,
+      serverVersion: payload.serverSettings.version,
+      userDefaultLibraryId: payload.userDefaultLibraryId,
+    } satisfies AuthorizedSummary,
+  };
+}
+
 export async function authorize(connection?: AudiobookshelfConnection) {
   const payload = await absJson<{
-    user: { username: string; type: string };
+    user: { id?: string; username: string; type: string };
     serverSettings: { version: string };
     userDefaultLibraryId?: string;
   }>("/api/authorize", {
@@ -390,7 +454,12 @@ export async function authorize(connection?: AudiobookshelfConnection) {
     connection,
   });
 
+  if (!payload?.user || typeof payload.user.username !== "string" || typeof payload.user.type !== "string" || typeof payload.serverSettings?.version !== "string") {
+    throw new AudiobookshelfError("Audiobookshelf authorization response was missing required fields.", "invalid_response");
+  }
+
   return {
+    userId: payload.user.id ?? connection?.userId ?? payload.user.username,
     username: payload.user.username,
     userType: payload.user.type,
     serverVersion: payload.serverSettings.version,
@@ -403,22 +472,26 @@ export async function listLibraries(connection?: AudiobookshelfConnection) {
     connection,
   });
 
-  return payload.libraries.filter((library) => library.mediaType === "book");
+  if (!Array.isArray(payload?.libraries)) throw new AudiobookshelfError("Audiobookshelf returned an invalid library list.", "invalid_response");
+
+  return payload.libraries.filter((library) => library && typeof library.id === "string" && typeof library.name === "string" && library.mediaType === "book");
 }
 
-export async function listLibraryItems(libraryId: string, connection?: AudiobookshelfConnection) {
+export async function listLibraryItems(libraryId: string, connection?: AudiobookshelfConnection, page = 0, limit = 100) {
   const params = new URLSearchParams({
     sort: "media.metadata.title",
     minified: "1",
-    limit: "0",
-    page: "0",
+    limit: String(limit),
+    page: String(page),
     include: "progress",
   });
 
-  return absJson<LibraryItemsResponse>(
+  const payload = await absJson<LibraryItemsResponse>(
     `/api/libraries/${libraryId}/items?${params.toString()}`,
     { connection },
   );
+  if (!Array.isArray(payload?.results) || typeof payload.total !== "number") throw new AudiobookshelfError("Audiobookshelf returned an invalid item list.", "invalid_response");
+  return { ...payload, results: payload.results.filter((item) => item && typeof item.id === "string" && item.mediaType === "book") };
 }
 
 export async function getLibraryFilterData(libraryId: string, connection?: AudiobookshelfConnection) {
@@ -433,9 +506,13 @@ export async function getLibraryItem(itemId: string, connection?: Audiobookshelf
     include: "progress",
   });
 
-  return absJson<LibraryItemExpanded>(`/api/items/${itemId}?${params.toString()}`, {
+  const item = await absJson<LibraryItemExpanded>(`/api/items/${itemId}?${params.toString()}`, {
     connection,
   });
+  if (!item || typeof item.id !== "string" || !item.media || typeof item.media.duration !== "number" || !item.media.metadata || typeof item.media.metadata.title !== "string") {
+    throw new AudiobookshelfError("Audiobookshelf returned an invalid library item.", "invalid_response");
+  }
+  return item;
 }
 
 export async function getLibraryItemFile(
@@ -449,7 +526,7 @@ export async function getLibraryItemFile(
 export async function startPlaybackSession(itemId: string, connection?: AudiobookshelfConnection) {
   const liveConnection = await getRequiredConnection(connection);
 
-  return absJson<PlaybackSession>(`/api/items/${itemId}/play`, {
+  const session = await absJson<PlaybackSession>(`/api/items/${itemId}/play`, {
     method: "POST",
     connection: liveConnection,
     body: JSON.stringify({
@@ -475,6 +552,10 @@ export async function startPlaybackSession(itemId: string, connection?: Audioboo
       ],
     }),
   });
+  if (!session || typeof session.id !== "string" || !Array.isArray(session.audioTracks) || !session.libraryItem) {
+    throw new AudiobookshelfError("Audiobookshelf returned an invalid playback session.", "invalid_response");
+  }
+  return session;
 }
 
 export async function syncSession(
@@ -513,3 +594,11 @@ export async function updateProgress(
     body: JSON.stringify(payload),
   });
 }
+
+export type PlaybackCheckpoint = {
+  action: "sync" | "close";
+  currentTime: number;
+  timeListened: number;
+  duration: number;
+  progress?: { itemId: string; progress: number; isFinished: boolean; finishedAt?: number | null; startedAt?: number };
+};

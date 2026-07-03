@@ -9,6 +9,8 @@ import {
   PlaybackSession,
   SubtitleCue,
 } from "@/lib/types";
+import { parseSubtitle } from "@/lib/srt";
+import { formatSleepTimer, useSleepTimer, type SleepTimerSelection } from "@/components/use-sleep-timer";
 
 type PlayerPanelProps = {
   item: LibraryItemExpanded | null;
@@ -17,6 +19,7 @@ type PlayerPanelProps = {
   onHide?: (() => void) | null;
   onInlineFullscreenChange?: ((isActive: boolean) => void) | null;
   openToken?: number;
+  preferenceScope?: string;
   variant?: "full" | "dock";
 };
 
@@ -55,6 +58,7 @@ const STATUS_MESSAGE_DURATION_MS = 5000;
 const FULLSCREEN_CONTROLS_IDLE_MS = 2500;
 const TIME_DISPLAY_MODE_STORAGE_KEY = "spoken-page-time-display-mode";
 const PLAYER_PREFERENCES_STORAGE_KEY = "spoken-page-player-preferences";
+const BOOK_SUBTITLE_PREFERENCES_STORAGE_KEY = "spoken-page-book-subtitle-preferences";
 const PLAY_INTERRUPTED_PATTERNS = [
   "the play() request was interrupted",
   "interrupted by a call to pause()",
@@ -76,6 +80,53 @@ type PlayerPreferences = {
   subtitleContrast: SubtitleContrast;
   fullscreenAutoHideMs: FullscreenAutoHide;
 };
+
+type BookSubtitlePreference = { offset: number; serverFileId: string };
+
+function scopedPlayerStorageKey(base: string, scope: string) {
+  return `${base}:${encodeURIComponent(scope)}`;
+}
+
+function readBookSubtitlePreference(bookId: string, scope: string): BookSubtitlePreference {
+  try {
+    const all = JSON.parse(window.localStorage.getItem(scopedPlayerStorageKey(BOOK_SUBTITLE_PREFERENCES_STORAGE_KEY, scope)) ?? "{}") as Record<
+      string,
+      Partial<BookSubtitlePreference>
+    >;
+    const value = all[bookId];
+    return {
+      offset: Number.isFinite(Number(value?.offset)) ? Math.min(8, Math.max(-8, Number(value?.offset))) : 0,
+      serverFileId: typeof value?.serverFileId === "string" ? value.serverFileId : "",
+    };
+  } catch {
+    return { offset: 0, serverFileId: "" };
+  }
+}
+
+function writeBookSubtitlePreference(bookId: string, value: BookSubtitlePreference, scope: string) {
+  try {
+    const storageKey = scopedPlayerStorageKey(BOOK_SUBTITLE_PREFERENCES_STORAGE_KEY, scope);
+    const all = JSON.parse(window.localStorage.getItem(storageKey) ?? "{}") as Record<
+      string,
+      BookSubtitlePreference
+    >;
+    all[bookId] = value;
+    window.localStorage.setItem(storageKey, JSON.stringify(all));
+  } catch {
+    // Storage can be unavailable in private browsing; playback should continue.
+  }
+}
+
+function readAllBookSubtitlePreferences(scope: string) {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(scopedPlayerStorageKey(BOOK_SUBTITLE_PREFERENCES_STORAGE_KEY, scope)) ?? "{}") as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, BookSubtitlePreference>)
+      : {};
+  } catch {
+    return {};
+  }
+}
 
 const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
   playbackRate: 1,
@@ -108,7 +159,7 @@ function listSubtitleFiles(item: LibraryItemExpanded | null) {
   return item.libraryFiles.filter((file) => {
     const extension = normalizeExt(file.metadata?.ext);
     const filename = getLibraryFileLabel(file).toLowerCase();
-    return extension === "srt" || filename.endsWith(".srt");
+    return extension === "srt" || extension === "vtt" || filename.endsWith(".srt") || filename.endsWith(".vtt");
   });
 }
 
@@ -200,71 +251,6 @@ function getChapterIndexAtTime(chapters: Chapter[] | undefined, time: number) {
   }
 
   return 0;
-}
-
-function parseSrtTimestamp(value: string) {
-  const [hours, minutes, secondsWithMs] = value.trim().replace(",", ".").split(":");
-
-  if (!hours || !minutes || !secondsWithMs) {
-    return 0;
-  }
-
-  const [seconds, milliseconds = "0"] = secondsWithMs.split(".");
-  return (
-    Number(hours) * 3600 +
-    Number(minutes) * 60 +
-    Number(seconds) +
-    Number(milliseconds.padEnd(3, "0").slice(0, 3)) / 1000
-  );
-}
-
-function parseSrt(content: string) {
-  return content
-    .replace(/\r/g, "")
-    .split(/\n{2,}/)
-    .map((block, index) => {
-      const lines = block
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-
-      if (lines.length < 2) {
-        return null;
-      }
-
-      const timingLineIndex = lines[0].includes("-->") ? 0 : 1;
-      const timingLine = lines[timingLineIndex];
-
-      if (!timingLine?.includes("-->")) {
-        return null;
-      }
-
-      const [rawStart, rawEnd] = timingLine.split("-->").map((entry) => entry.trim());
-      const text = lines
-        .slice(timingLineIndex + 1)
-        .join("\n")
-        .replace(/<[^>]+>/g, "")
-        .trim();
-
-      if (!text) {
-        return null;
-      }
-
-      const start = parseSrtTimestamp(rawStart);
-      const end = parseSrtTimestamp(rawEnd);
-
-      if (!(end > start)) {
-        return null;
-      }
-
-      return {
-        id: `cue-${index}-${start}`,
-        start,
-        end,
-        text,
-      } satisfies SubtitleCue;
-    })
-    .filter((cue): cue is SubtitleCue => Boolean(cue));
 }
 
 function getSubtitleCueAtTime(cues: SubtitleCue[], time: number) {
@@ -427,6 +413,7 @@ export function PlayerPanel({
   onHide = null,
   onInlineFullscreenChange = null,
   openToken = 0,
+  preferenceScope = "anonymous",
   variant = "full",
 }: PlayerPanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
@@ -446,12 +433,16 @@ export function PlayerPanel({
   const listenedSecondsRef = useRef(0);
   const listenWindowStartRef = useRef<number | null>(null);
   const trackRequestIdRef = useRef(0);
+  const checkpointSequenceRef = useRef(0);
+  const checkpointQueueRef = useRef<Promise<void>>(Promise.resolve());
   const lastSyncedTimeRef = useRef(0);
   const lastAutoRefreshTokenRef = useRef(0);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const wakeLockReleaseListenerRef = useRef<EventListener | null>(null);
   const fullscreenFallbackStatusShownRef = useRef(false);
   const fullscreenControlsTimeoutRef = useRef<number | null>(null);
+  const playerPreferencesDirtyRef = useRef(false);
+  const subtitlePreferencesDirtyRef = useRef(false);
 
   const [session, setSession] = useState<PlaybackSession | null>(null);
   const [trackLoadRequest, setTrackLoadRequest] = useState<TrackLoadRequest | null>(null);
@@ -469,6 +460,7 @@ export function PlayerPanel({
   const [subtitleError, setSubtitleError] = useState<string | null>(null);
   const [subtitleOffset, setSubtitleOffset] = useState(0);
   const [selectedServerSubtitleId, setSelectedServerSubtitleId] = useState("");
+  const [subtitlePreferenceItemId, setSubtitlePreferenceItemId] = useState<string | null>(null);
   const [hasPlaybackStarted, setHasPlaybackStarted] = useState(false);
   const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
   const [isInlineFullscreen, setIsInlineFullscreen] = useState(false);
@@ -476,6 +468,7 @@ export function PlayerPanel({
   const [isChapterListOpen, setIsChapterListOpen] = useState(false);
   const [isFullscreenControlsVisible, setIsFullscreenControlsVisible] = useState(true);
   const [isSubtitleDisplayOptionsOpen, setIsSubtitleDisplayOptionsOpen] = useState(false);
+  const [isShortcutHelpOpen, setIsShortcutHelpOpen] = useState(false);
   const [subtitleScale, setSubtitleScale] = useState<SubtitleScale>(DEFAULT_PLAYER_PREFERENCES.subtitleScale);
   const [subtitleLineHeight, setSubtitleLineHeight] = useState<SubtitleLineHeight>(
     DEFAULT_PLAYER_PREFERENCES.subtitleLineHeight,
@@ -490,6 +483,8 @@ export function PlayerPanel({
     DEFAULT_PLAYER_PREFERENCES.fullscreenAutoHideMs,
   );
   const [hasLoadedPreferences, setHasLoadedPreferences] = useState(false);
+  const [subtitlePreferencesRevision, setSubtitlePreferencesRevision] = useState(0);
+  const [hasLoadedSubtitlePreferences, setHasLoadedSubtitlePreferences] = useState(false);
 
   const serverSubtitleFiles = useMemo(() => listSubtitleFiles(item), [item]);
   const chapters = item?.media.chapters ?? [];
@@ -503,6 +498,11 @@ export function PlayerPanel({
     () => getChapterAtTime(item?.media.chapters, currentTime),
     [item?.media.chapters, currentTime],
   );
+  const sleepTimer = useSleepTimer(item?.id, currentTime, activeChapter?.end, () => {
+    audioRef.current?.pause();
+    setIsPlaying(false);
+    setPlayerStatus("Sleep timer finished. Playback paused.");
+  });
   const activeSubtitle = useMemo(
     () => getSubtitleCueAtTime(subtitleCues, currentTime + subtitleOffset),
     [currentTime, subtitleCues, subtitleOffset],
@@ -572,13 +572,14 @@ export function PlayerPanel({
   }, [playbackRate]);
 
   useEffect(() => {
-    const savedMode = window.localStorage.getItem(TIME_DISPLAY_MODE_STORAGE_KEY);
+    const savedMode = window.localStorage.getItem(scopedPlayerStorageKey(TIME_DISPLAY_MODE_STORAGE_KEY, preferenceScope));
     setTimeDisplayMode(savedMode === "remaining" ? "remaining" : "elapsed");
-  }, []);
+  }, [preferenceScope]);
 
   useEffect(() => {
+    setHasLoadedPreferences(false);
     const storedPreferences = parseStoredPreferences(
-      window.localStorage.getItem(PLAYER_PREFERENCES_STORAGE_KEY),
+      window.localStorage.getItem(scopedPlayerStorageKey(PLAYER_PREFERENCES_STORAGE_KEY, preferenceScope)),
     );
 
     setPlaybackRate(storedPreferences.playbackRate);
@@ -588,34 +589,89 @@ export function PlayerPanel({
     setSubtitlePosition(storedPreferences.subtitlePosition);
     setSubtitleContrast(storedPreferences.subtitleContrast);
     setFullscreenAutoHideMs(storedPreferences.fullscreenAutoHideMs);
-    setHasLoadedPreferences(true);
-  }, []);
+    const loadServerPreferences = async () => {
+      try {
+        const response = await fetch("/api/preferences/player", { cache: "no-store" });
+        if (response.ok) {
+          const payload = (await response.json()) as { value?: unknown };
+          if (payload.value) {
+            const serverPreferences = parseStoredPreferences(JSON.stringify(payload.value));
+            setPlaybackRate(serverPreferences.playbackRate);
+            setVolume(serverPreferences.volume);
+            setSubtitleScale(serverPreferences.subtitleScale);
+            setSubtitleLineHeight(serverPreferences.subtitleLineHeight);
+            setSubtitlePosition(serverPreferences.subtitlePosition);
+            setSubtitleContrast(serverPreferences.subtitleContrast);
+            setFullscreenAutoHideMs(serverPreferences.fullscreenAutoHideMs);
+          }
+        }
+      } finally {
+        setHasLoadedPreferences(true);
+      }
+    };
+    void loadServerPreferences();
+  }, [preferenceScope]);
 
   useEffect(() => {
-    window.localStorage.setItem(TIME_DISPLAY_MODE_STORAGE_KEY, timeDisplayMode);
-  }, [timeDisplayMode]);
+    setHasLoadedSubtitlePreferences(false);
+    const loadServerSubtitlePreferences = async () => {
+      try {
+        const response = await fetch("/api/preferences/subtitles", { cache: "no-store" });
+        if (response.ok) {
+          const payload = (await response.json()) as { value?: unknown };
+          if (payload.value && typeof payload.value === "object" && !Array.isArray(payload.value)) {
+            const merged = { ...readAllBookSubtitlePreferences(preferenceScope), ...(payload.value as object) };
+            window.localStorage.setItem(scopedPlayerStorageKey(BOOK_SUBTITLE_PREFERENCES_STORAGE_KEY, preferenceScope), JSON.stringify(merged));
+            setSubtitlePreferencesRevision((value) => value + 1);
+          }
+        }
+      } finally {
+        setHasLoadedSubtitlePreferences(true);
+      }
+    };
+    void loadServerSubtitlePreferences();
+  }, [preferenceScope]);
+
+  useEffect(() => {
+    window.localStorage.setItem(scopedPlayerStorageKey(TIME_DISPLAY_MODE_STORAGE_KEY, preferenceScope), timeDisplayMode);
+  }, [preferenceScope, timeDisplayMode]);
 
   useEffect(() => {
     if (!hasLoadedPreferences) {
       return;
     }
 
+    const preferences = {
+      playbackRate,
+      volume,
+      subtitleScale,
+      subtitleLineHeight,
+      subtitlePosition,
+      subtitleContrast,
+      fullscreenAutoHideMs,
+    } satisfies PlayerPreferences;
     window.localStorage.setItem(
-      PLAYER_PREFERENCES_STORAGE_KEY,
-      JSON.stringify({
-        playbackRate,
-        volume,
-        subtitleScale,
-        subtitleLineHeight,
-        subtitlePosition,
-        subtitleContrast,
-        fullscreenAutoHideMs,
-      } satisfies PlayerPreferences),
+      scopedPlayerStorageKey(PLAYER_PREFERENCES_STORAGE_KEY, preferenceScope),
+      JSON.stringify(preferences),
     );
+    playerPreferencesDirtyRef.current = true;
+    const timeout = window.setTimeout(() => {
+      void fetch("/api/preferences/player", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: preferences }),
+      }).then((response) => {
+        if (response.ok) playerPreferencesDirtyRef.current = false;
+      }).catch(() => {
+        playerPreferencesDirtyRef.current = true;
+      });
+    }, 500);
+    return () => window.clearTimeout(timeout);
   }, [
     fullscreenAutoHideMs,
     hasLoadedPreferences,
     playbackRate,
+    preferenceScope,
     subtitleContrast,
     subtitleLineHeight,
     subtitlePosition,
@@ -1035,6 +1091,13 @@ export function PlayerPanel({
         return false;
       }
 
+      const previousCheckpoint = checkpointQueueRef.current;
+      let releaseCheckpoint: () => void = () => {};
+      checkpointQueueRef.current = new Promise<void>((resolve) => {
+        releaseCheckpoint = resolve;
+      });
+      await previousCheckpoint;
+
       const duration = Math.max(
         resolveTimelineDuration(
           targetItem,
@@ -1054,15 +1117,26 @@ export function PlayerPanel({
       }
 
       try {
-        const sessionResponse = await fetch(`/api/session/${targetSession.id}/${mode}`, {
+        const checkpointSequence = checkpointSequenceRef.current + 1;
+        const sessionResponse = await fetch(`/api/session/${targetSession.id}/checkpoint`, {
           method: "POST",
+          keepalive: mode === "close",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            sequence: checkpointSequence,
+            action: mode,
             currentTime: nextTime,
             timeListened,
             duration,
+            progress: {
+              itemId: targetItem.id,
+              progress: duration > 0 ? nextTime / duration : 0,
+              isFinished,
+              finishedAt: isFinished ? now : null,
+              startedAt: targetItem.userMediaProgress?.startedAt ?? targetSession?.startedAt ?? now,
+            },
           }),
         });
         const sessionPayload = (await sessionResponse.json()) as {
@@ -1075,29 +1149,11 @@ export function PlayerPanel({
           throw new Error(sessionPayload.error ?? "Unable to sync the Audiobookshelf session.");
         }
 
+        checkpointSequenceRef.current = checkpointSequence;
+
         if (sessionPayload.session?.id) {
           setSession(sessionPayload.session);
           sessionRef.current = sessionPayload.session;
-        }
-
-        const progressResponse = await fetch(`/api/me/progress/${targetItem.id}`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            duration,
-            progress: duration > 0 ? nextTime / duration : 0,
-            currentTime: nextTime,
-            isFinished,
-            finishedAt: isFinished ? now : null,
-            startedAt: targetItem.userMediaProgress?.startedAt ?? targetSession?.startedAt ?? now,
-          }),
-        });
-        const progressPayload = (await progressResponse.json()) as { ok?: boolean; error?: string };
-
-        if (!progressResponse.ok) {
-          throw new Error(progressPayload.error ?? "Unable to save playback progress.");
         }
 
         resetListeningClock();
@@ -1127,6 +1183,7 @@ export function PlayerPanel({
         }
         return false;
       } finally {
+        releaseCheckpoint();
         if (!options?.silent) {
           setBusyAction(null);
         }
@@ -1252,10 +1309,10 @@ export function PlayerPanel({
         throw new Error(body || "Unable to load the selected subtitle file.");
       }
 
-      const parsedCues = parseSrt(body);
+      const parsedCues = parseSubtitle(body);
 
       if (!parsedCues.length) {
-        throw new Error("That subtitle file did not contain any readable SRT cues.");
+        throw new Error("That subtitle file did not contain any readable SRT or WebVTT cues.");
       }
 
       setSubtitleCues(parsedCues);
@@ -1303,8 +1360,10 @@ export function PlayerPanel({
 
     setSubtitleCues([]);
     setSubtitleError(null);
-    setSubtitleOffset(0);
-    setSelectedServerSubtitleId("");
+    const savedSubtitlePreference = item ? readBookSubtitlePreference(item.id, preferenceScope) : { offset: 0, serverFileId: "" };
+    setSubtitleOffset(savedSubtitlePreference.offset);
+    setSelectedServerSubtitleId(savedSubtitlePreference.serverFileId);
+    setSubtitlePreferenceItemId(item?.id ?? null);
     setHasPlaybackStarted(false);
     fullscreenFallbackStatusShownRef.current = false;
     void releaseWakeLock();
@@ -1318,7 +1377,9 @@ export function PlayerPanel({
       return;
     }
 
-    const firstSubtitleFile = serverSubtitleFiles[0];
+    const firstSubtitleFile =
+      serverSubtitleFiles.find((file) => String(file.ino) === savedSubtitlePreference.serverFileId) ??
+      serverSubtitleFiles[0];
 
     if (firstSubtitleFile) {
       setSubtitleSourceLabel(getLibraryFileLabel(firstSubtitleFile));
@@ -1329,7 +1390,54 @@ export function PlayerPanel({
 
     setSubtitleSourceLabel("No subtitle file loaded");
     setSubtitleStatus(null);
-  }, [exitFullscreenSafely, item?.id, releaseWakeLock]);
+  }, [exitFullscreenSafely, item?.id, preferenceScope, releaseWakeLock, subtitlePreferencesRevision]);
+
+  useEffect(() => {
+    if (!item?.id || subtitlePreferenceItemId !== item.id) return;
+    writeBookSubtitlePreference(item.id, { offset: subtitleOffset, serverFileId: selectedServerSubtitleId }, preferenceScope);
+    if (!hasLoadedSubtitlePreferences) return;
+    subtitlePreferencesDirtyRef.current = true;
+    const timeout = window.setTimeout(() => {
+      void fetch("/api/preferences/subtitles", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: readAllBookSubtitlePreferences(preferenceScope) }),
+      }).then((response) => {
+        if (response.ok) subtitlePreferencesDirtyRef.current = false;
+      }).catch(() => {
+        subtitlePreferencesDirtyRef.current = true;
+      });
+    }, 500);
+    return () => window.clearTimeout(timeout);
+  }, [hasLoadedSubtitlePreferences, item?.id, preferenceScope, selectedServerSubtitleId, subtitleOffset, subtitlePreferenceItemId]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      if (playerPreferencesDirtyRef.current) {
+        const raw = window.localStorage.getItem(scopedPlayerStorageKey(PLAYER_PREFERENCES_STORAGE_KEY, preferenceScope));
+        if (raw) {
+          void fetch("/api/preferences/player", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value: parseStoredPreferences(raw) }),
+          }).then((response) => {
+            if (response.ok) playerPreferencesDirtyRef.current = false;
+          }).catch(() => undefined);
+        }
+      }
+      if (subtitlePreferencesDirtyRef.current) {
+        void fetch("/api/preferences/subtitles", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: readAllBookSubtitlePreferences(preferenceScope) }),
+        }).then((response) => {
+          if (response.ok) subtitlePreferencesDirtyRef.current = false;
+        }).catch(() => undefined);
+      }
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [preferenceScope]);
 
   useEffect(() => {
     if (!item || sessionRef.current || audioRef.current?.src) {
@@ -1460,10 +1568,10 @@ export function PlayerPanel({
 
     try {
       const body = await file.text();
-      const parsedCues = parseSrt(body);
+      const parsedCues = parseSubtitle(body);
 
       if (!parsedCues.length) {
-        throw new Error("That subtitle file did not contain any readable SRT cues.");
+        throw new Error("That subtitle file did not contain any readable SRT or WebVTT cues.");
       }
 
       setSubtitleCues(parsedCues);
@@ -1726,12 +1834,8 @@ export function PlayerPanel({
   }
 
   useEffect(() => {
-    if (!isFullscreen) {
-      return;
-    }
-
     const handleWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.code !== "Space" || event.repeat) {
+      if (event.defaultPrevented || event.repeat) {
         return;
       }
 
@@ -1742,6 +1846,8 @@ export function PlayerPanel({
 
         if (
           target.isContentEditable ||
+          tagName === "BUTTON" ||
+          tagName === "A" ||
           tagName === "INPUT" ||
           tagName === "TEXTAREA" ||
           tagName === "SELECT"
@@ -1750,9 +1856,39 @@ export function PlayerPanel({
         }
       }
 
-      event.preventDefault();
-      revealFullscreenControls(true);
-      void handlePrimaryTransport();
+      const key = event.key.toLowerCase();
+      let handled = true;
+
+      if (event.code === "Space" || key === "k") {
+        void handlePrimaryTransport();
+      } else if (key === "j") {
+        handleRelativeSeek(-10);
+      } else if (key === "l") {
+        handleRelativeSeek(10);
+      } else if (event.key === "ArrowLeft" && event.shiftKey) {
+        handleChapterStep("previous");
+      } else if (event.key === "ArrowRight" && event.shiftKey) {
+        handleChapterStep("next");
+      } else if (event.key === "ArrowLeft") {
+        handleRelativeSeek(-15);
+      } else if (event.key === "ArrowRight") {
+        handleRelativeSeek(30);
+      } else if (key === "m") {
+        setVolume((current) => (current > 0 ? 0 : 1));
+      } else if (key === "f") {
+        void toggleFullscreen();
+      } else if (event.key === "?") {
+        setIsShortcutHelpOpen((current) => !current);
+      } else if (event.key === "Escape" && isShortcutHelpOpen) {
+        setIsShortcutHelpOpen(false);
+      } else {
+        handled = false;
+      }
+
+      if (handled) {
+        event.preventDefault();
+        revealFullscreenControls(true);
+      }
     };
 
     window.addEventListener("keydown", handleWindowKeyDown);
@@ -1760,7 +1896,7 @@ export function PlayerPanel({
     return () => {
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
-  }, [isFullscreen, revealFullscreenControls]);
+  });
 
   function renderSubtitleTools() {
     return (
@@ -1791,8 +1927,8 @@ export function PlayerPanel({
           </label>
 
           <label className="field field-file">
-            <span>Upload .srt file</span>
-            <input accept=".srt" onChange={handleManualSubtitleUpload} ref={subtitleUploadRef} type="file" />
+            <span>Upload .srt or .vtt file</span>
+            <input accept=".srt,.vtt,text/vtt" onChange={handleManualSubtitleUpload} ref={subtitleUploadRef} type="file" />
           </label>
 
           <label className="field">
@@ -1845,12 +1981,12 @@ export function PlayerPanel({
       ? "Press start to bring subtitles into view."
       : "Pick a subtitle file to turn on read-along mode.";
     const promptBody = isFullscreen && !hasLoadedSubtitles
-      ? "No subtitle file is loaded yet. Exit full screen to choose an Audiobookshelf subtitle or upload your own .srt file."
+      ? "No subtitle file is loaded yet. Exit full screen to choose an Audiobookshelf subtitle or upload your own .srt or .vtt file."
       : hasLoadedSubtitles
         ? "Your subtitle file is ready. Start playback and the active line will appear here."
         : serverSubtitleFiles.length
           ? "We found subtitle files in Audiobookshelf, but none are loaded yet. Open subtitle options to choose one."
-          : "No subtitle file is loaded yet. Open subtitle options to pick an Audiobookshelf subtitle or upload your own .srt file.";
+          : "No subtitle file is loaded yet. Open subtitle options to pick an Audiobookshelf subtitle or upload your own .srt or .vtt file.";
 
     return (
       <article className="subtitle-prompt-card">
@@ -1875,7 +2011,7 @@ export function PlayerPanel({
                 onClick={() => subtitleUploadRef.current?.click()}
                 type="button"
               >
-                Upload .srt
+                Upload subtitles
               </button>
             ) : null}
           </div>
@@ -1898,7 +2034,7 @@ export function PlayerPanel({
             }`.trim()}
           >
             {hasLoadedSubtitles && !shouldShowLoadedSubtitlePrompt ? (
-              <p className="subtitle-active">
+              <p aria-live="polite" aria-atomic="true" className="subtitle-active">
                 {activeSubtitleText || "\u00A0"}
               </p>
             ) : (
@@ -2031,6 +2167,8 @@ export function PlayerPanel({
 
             {chapterLabel ? (
               <button
+                aria-expanded={isChapterListOpen}
+                aria-haspopup="listbox"
                 className={`chapter-pill chapter-pill-button ${
                   isChapterListOpen ? "chapter-pill-button-active" : ""
                 }`.trim()}
@@ -2077,10 +2215,47 @@ export function PlayerPanel({
                 {volumePercent}%
               </output>
             </label>
+
+            <details className="sleep-timer-popover">
+              <summary>
+                <span>Sleep timer</span>
+                <output aria-live="polite">
+                  {sleepTimer.selection === "off" ? "Off" : formatSleepTimer(sleepTimer.remainingSeconds)}
+                </output>
+              </summary>
+              <div aria-label="Sleep timer choices" className="sleep-timer-panel" role="group">
+                <div className="sleep-timer-options">
+                {([
+                  ["off", "Off"],
+                  [15, "15m"],
+                  [30, "30m"],
+                  [45, "45m"],
+                  [60, "60m"],
+                  ["chapter", "Chapter"],
+                ] as Array<[SleepTimerSelection, string]>).map(([value, label]) => (
+                  <button
+                    aria-pressed={sleepTimer.selection === value}
+                    className={`sleep-timer-option ${sleepTimer.selection === value ? "sleep-timer-option-active" : ""}`}
+                    disabled={value === "chapter" && !activeChapter}
+                    key={String(value)}
+                    onClick={(event) => {
+                      sleepTimer.setSelection(value);
+                      event.currentTarget.closest("details")?.removeAttribute("open");
+                    }}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+                </div>
+                <p>Choose a duration or stop at the end of the current chapter.</p>
+              </div>
+            </details>
           </div>
         </div>
 
         <input
+          aria-label={`Playback position, ${formatTime(currentTime)} of ${formatTime(totalDuration)}`}
           className="progress-slider"
           max={Math.max(totalDuration, 1)}
           min={0}
@@ -2187,6 +2362,16 @@ export function PlayerPanel({
 
           <div className="transport-controls-side">
             <button
+              aria-expanded={isShortcutHelpOpen}
+              aria-label="Keyboard shortcuts"
+              className="icon-button transport-action-button fullscreen-button"
+              onClick={() => setIsShortcutHelpOpen((current) => !current)}
+              title="Keyboard shortcuts (?)"
+              type="button"
+            >
+              ?
+            </button>
+            <button
               aria-expanded={isSubtitleDisplayOptionsOpen}
               aria-label="Subtitle display options"
               className={`icon-button transport-action-button fullscreen-button ${
@@ -2247,6 +2432,14 @@ export function PlayerPanel({
           </section>
         ) : null}
 
+        {isShortcutHelpOpen ? (
+          <section aria-label="Keyboard shortcuts" className="transport-subpanel shortcut-help-panel">
+            <p><kbd>Space</kbd>/<kbd>K</kbd> play or pause · <kbd>J</kbd>/<kbd>L</kbd> back/forward 10s</p>
+            <p><kbd>←</kbd>/<kbd>→</kbd> back 15s/forward 30s · <kbd>Shift</kbd> + arrows change chapter</p>
+            <p><kbd>M</kbd> mute · <kbd>F</kbd> full screen · <kbd>?</kbd> toggle this help</p>
+          </section>
+        ) : null}
+
         {isChapterListOpen && chapters.length ? (
           <section className="chapter-picker">
             <div className="chapter-list" role="list">
@@ -2296,7 +2489,7 @@ export function PlayerPanel({
           {shouldShowSubtitleMeta ? (
             <div className="player-footer-notice" aria-live="polite">
               {footerNotice ? (
-                <p className={`status-message ${footerNoticeIsError ? "status-error" : ""}`.trim()}>
+                <p role={footerNoticeIsError ? "alert" : "status"} className={`status-message ${footerNoticeIsError ? "status-error" : ""}`.trim()}>
                   {footerNotice}
                 </p>
               ) : (

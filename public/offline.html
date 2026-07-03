@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#08050a" />
+    <title>Spoken Page — Offline</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #08050a; color: #fff7f8; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; text-align: center; }
+      main { width: min(30rem, calc(100% - 3rem)); }
+      img { width: min(18rem, 80%); height: auto; }
+      p { color: #d9c5c9; line-height: 1.6; }
+      button { border: 0; border-radius: 999px; padding: .8rem 1.2rem; background: #ff6675; color: #180509; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/spoken-page-logo-trimmed.png" alt="Spoken Page" />
+      <h1>You’re offline</h1>
+      <p>Reconnect to your network and try again. Spoken Page never caches your Audiobookshelf API responses or private audio in its offline shell.</p>
+      <button onclick="location.reload()" type="button">Try again</button>
+    </main>
+  </body>
+</html>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { absFetch } from "@/lib/audiobookshelf";
+import { errorResponse, requireId } from "@/lib/server-api";
 
 type RouteContext = {
   params: Promise<{ itemId: string }>;
@@ -7,7 +8,8 @@ type RouteContext = {
 
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
-    const { itemId } = await context.params;
+    const { itemId: rawItemId } = await context.params;
+    const itemId = requireId(rawItemId, "Item ID");
     const upstream = await absFetch(`/api/items/${itemId}/cover`, {
       signal: request.signal,
     });
@@ -16,11 +18,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
       status: upstream.status,
       headers: {
         "Content-Type": upstream.headers.get("content-type") ?? "image/jpeg",
-        "Cache-Control": "private, max-age=3600",
+        "Cache-Control": "private, no-store",
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load cover art.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return errorResponse(error, "Unable to load cover art.", request);
   }
 }

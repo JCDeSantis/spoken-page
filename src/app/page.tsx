@@ -31,7 +31,7 @@ export default async function HomePage() {
 
   if (!connection && connectionPolicy.requiresServerConfiguration) {
     connectionError =
-      "This deployment is not ready yet. Set SPOKEN_PAGE_ABS_BASE_URL or SPOKEN_PAGE_ALLOWED_BASE_URLS before connecting.";
+      "This deployment is not ready yet. Configure SPOKEN_PAGE_SECRET and SPOKEN_PAGE_ABS_BASE_URL before signing in.";
   }
 
   return (

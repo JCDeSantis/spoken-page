@@ -7,9 +7,10 @@ import { LibraryItemExpanded } from "@/lib/types";
 
 type FocusPlayerShellProps = {
   itemId: string;
+  preferenceScope: string;
 };
 
-export function FocusPlayerShell({ itemId }: FocusPlayerShellProps) {
+export function FocusPlayerShell({ itemId, preferenceScope }: FocusPlayerShellProps) {
   const [item, setItem] = useState<LibraryItemExpanded | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +62,7 @@ export function FocusPlayerShell({ itemId }: FocusPlayerShellProps) {
       {error ? <p className="status-message status-error">{error}</p> : null}
 
       <div className="focus-player-frame">
-        <PlayerPanel focusMode item={item} onItemRefresh={loadItem} />
+        <PlayerPanel focusMode item={item} onItemRefresh={loadItem} preferenceScope={preferenceScope} />
       </div>
     </main>
   );

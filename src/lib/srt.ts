@@ -2,13 +2,13 @@ import { SubtitleCue } from "@/lib/types";
 
 function parseTimestamp(value: string) {
   const normalized = value.trim().replace(",", ".");
-  const match = normalized.match(/^(\d{2}):(\d{2}):(\d{2})\.(\d{1,3})$/);
+  const match = normalized.match(/^(?:(\d{1,3}):)?(\d{2}):(\d{2})\.(\d{1,3})$/);
 
   if (!match) {
     return Number.NaN;
   }
 
-  const [, hoursText, minutesText, secondsText, millisecondsText] = match;
+  const [, hoursText = "0", minutesText, secondsText, millisecondsText] = match;
   const hours = Number(hoursText);
   const minutes = Number(minutesText);
   const seconds = Number(secondsText);
@@ -17,8 +17,13 @@ function parseTimestamp(value: string) {
   return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
 }
 
-export function parseSrt(text: string) {
-  const normalized = text.replace(/\r/g, "").trim();
+/** Parses both SubRip (.srt) and WebVTT (.vtt) into the player's shared cue shape. */
+export function parseSubtitle(text: string) {
+  const normalized = text
+    .replace(/^\uFEFF/, "")
+    .replace(/\r/g, "")
+    .replace(/^WEBVTT[^\n]*\n(?:\n)?/, "")
+    .trim();
 
   if (!normalized) {
     return [] satisfies SubtitleCue[];
@@ -30,12 +35,16 @@ export function parseSrt(text: string) {
   for (const block of blocks) {
     const lines = block.split("\n").map((line) => line.trimEnd());
 
+    if (/^(NOTE|STYLE|REGION)(?:\s|$)/.test(lines[0] ?? "")) {
+      continue;
+    }
+
     if (lines.length < 2) {
       continue;
     }
 
     let cursor = 0;
-    if (/^\d+$/.test(lines[0] ?? "")) {
+    if (!lines[0]?.includes("-->") && lines[1]?.includes("-->")) {
       cursor = 1;
     }
 
@@ -45,7 +54,7 @@ export function parseSrt(text: string) {
     }
 
     const match = timeLine.match(
-      /(\d{2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{1,3})/,
+      /((?:\d{1,3}:)?\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*((?:\d{1,3}:)?\d{2}:\d{2}[,.]\d{1,3})/,
     );
 
     if (!match) {
@@ -59,6 +68,7 @@ export function parseSrt(text: string) {
       .slice(cursor + 1)
       .join("\n")
       .replace(/\{\\an\d\}/g, "")
+      .replace(/<\/?(?:c(?:\.[^ >]+)?|i|b|u|ruby|rt|v|lang)(?:\s+[^>]*)?>/gi, "")
       .trim();
 
     if (!subtitleText || Number.isNaN(start) || Number.isNaN(end)) {
@@ -75,6 +85,8 @@ export function parseSrt(text: string) {
 
   return cues;
 }
+
+export const parseSrt = parseSubtitle;
 
 export function findCueIndex(cues: SubtitleCue[], time: number) {
   let low = 0;

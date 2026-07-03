@@ -1,17 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLibraryFilterData } from "@/lib/audiobookshelf";
+import { errorResponse, privateJson, requireId } from "@/lib/server-api";
 
 type RouteContext = {
   params: Promise<{ libraryId: string }>;
 };
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
   try {
-    const { libraryId } = await context.params;
+    const { libraryId: rawLibraryId } = await context.params;
+    const libraryId = requireId(rawLibraryId, "Library ID");
     const payload = await getLibraryFilterData(libraryId);
-    return NextResponse.json(payload);
+    return privateJson(payload);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load library filters.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return errorResponse(error, "Unable to load library filters.", request);
   }
 }

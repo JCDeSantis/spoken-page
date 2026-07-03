@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { listLibraries } from "@/lib/audiobookshelf";
+import { errorResponse, privateJson } from "@/lib/server-api";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const libraries = await listLibraries();
-    return NextResponse.json({ libraries });
+    return privateJson({ libraries });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load libraries.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return errorResponse(error, "Unable to load libraries.", request);
   }
 }

@@ -1,289 +1,167 @@
 # Spoken Page
 
-![Version](https://img.shields.io/badge/version-v1.0.2-ff5664?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-v1.1.0-ff5664?style=for-the-badge)
+![License](https://img.shields.io/badge/license-MIT-163434?style=for-the-badge)
 
 ![Spoken Page logo](public/spoken-page-logo-trimmed.png)
 
-Spoken Page is a subtitle-first web companion for [Audiobookshelf](https://github.com/advplyr/audiobookshelf).
+Spoken Page is a responsive, subtitle-first web player for [Audiobookshelf](https://github.com/advplyr/audiobookshelf). It keeps Audiobookshelf as the source of truth while adding a focused library and listening experience for desktop, tablet, and installable PWA use.
 
-It gives Audiobookshelf users a focused browser-based listening surface with synced playback, chapter navigation, and `.srt` subtitle support for desktop and tablet reading-listening workflows.
+## What v1.1 adds
 
-## Built With AI
+- Audiobookshelf account sign-in with encrypted, persistent server-side sessions
+- Cross-device favorites, recents, queues, reading status, and player preferences
+- A redesigned library with search, sorting, filters, saved and recently played shelves
+- Book detail modals with expandable synopses and manual reading status
+- A compact, tablet-friendly player with chapters, queue controls, speed, sleep timer, and keyboard shortcuts
+- Subtitle discovery and local `.srt`/`.vtt` upload with per-book timing offsets
+- PWA installation, offline shell support, health/readiness endpoints, and Docker persistence
 
-Spoken Page was built almost entirely through AI-assisted development.
+See [PATCH_NOTES.md](PATCH_NOTES.md) for the complete v1.1 release notes.
 
-I am not a professional developer, and this project exists because modern AI tools made it possible to design, build, and iterate on an idea that otherwise would have been out of reach.
+## Highlights
 
-## Why Spoken Page Exists
+### Library
 
-Audiobookshelf is already excellent at organizing, hosting, and syncing audiobook playback. Spoken Page does not try to replace it.
+- Browse every audiobook library available to your Audiobookshelf account
+- Search and filter by author, narrator, genre, series, and manual reading status
+- Sort books and browse favorites, recently played titles, and saved queues
+- Open a book without adding it to recents; a title becomes recent only after playback starts
+- Set a book to Planned, In Progress, or Completed—or leave its status blank
+- Expand long synopses directly in the book details modal
+- Queue the next book in a series
 
-Instead, Spoken Page adds a cleaner subtitle-aware listening experience on top of Audiobookshelf for situations like:
+### Player
 
-- read-along listening
-- accessibility support
-- subtitle timing adjustment
-- subtitle-first playback on desktop and iPad
-- quick browsing and re-entry into active books
+- Start and resume native Audiobookshelf playback sessions
+- Keep progress synchronized with Audiobookshelf across multi-track books
+- Navigate chapters or jump through the complete book timeline
+- Change playback speed and subtitle timing
+- Use a compact pop-up sleep timer designed for touch screens
+- Open a focused player route or a separate player window
+- Use keyboard shortcuts and Media Session controls where the browser supports them
 
-Audiobookshelf remains the source of truth for:
+### Subtitles
 
-- libraries
-- item metadata
-- playback sessions
-- chapter data
-- progress syncing
+- Automatically find attached Audiobookshelf `.srt` and `.vtt` files
+- Upload a local subtitle file when the server has none
+- Display the active line in a subtitle-focused reading view
+- Save subtitle source and timing offset separately for each book
 
-## Features
+### Accounts and sync
 
-- Connect to an Audiobookshelf server using a user API token
-- Browse audiobook libraries from a responsive web UI
-- Open a book and start a real Audiobookshelf playback session
-- Stream audio through a local Next.js proxy
-- Automatically detect attached Audiobookshelf `.srt` subtitle files
-- Upload a local `.srt` file as a fallback
-- Display active subtitles in a dedicated subtitle-first player
-- Adjust subtitle timing offsets
-- Sync playback progress back to Audiobookshelf
-- Pull the latest server progress on demand
-- Continue across multi-track audiobooks on one shared timeline
-- Jump between chapters from transport controls or the chapter list
-- Use dark mode or light mode
-- Save favorites locally in the browser
-- Maintain a recent-books shelf with individual dismiss controls
-- Open a focused player route for a cleaner reading/listening mode
-- Pop the player out into its own browser window
-- Run as a Docker container or a direct Windows Node.js server
+Spoken Page uses your existing Audiobookshelf account; it does not maintain a second user database. Your password is forwarded once to Audiobookshelf and is never stored. Spoken Page stores an opaque session cookie in the browser and an encrypted Audiobookshelf token in its persistent data directory. Preferences are keyed to the Audiobookshelf server and user account so they follow you across devices.
 
-## Quick Start
+OpenID-only Audiobookshelf users can sign in with the API-token fallback.
 
-### Docker Compose
+## Quick start with Docker Compose
 
-This is the easiest deployment path for most users once the published container image is available.
+1. Clone this repository and enter its directory.
+2. Copy `.env.example` to `.env`.
+3. Set a strong secret and the Audiobookshelf URL reachable from the container:
 
-1. Clone the repo.
-2. Set the runtime environment values. The quickest path is to use the examples in `.env.example`.
-
-Minimum recommended values:
-
-```text
-SPOKEN_PAGE_SECRET=replace-this-with-a-long-random-string
+```dotenv
+SPOKEN_PAGE_SECRET=replace-with-a-long-random-value
 SPOKEN_PAGE_ABS_BASE_URL=http://host.docker.internal:13378
 ```
 
-Quick env var guide:
-
-- `SPOKEN_PAGE_SECRET`
-  A private random string you make up for Spoken Page. It is not your Audiobookshelf API token. Spoken Page uses it to protect the saved connection cookie.
-- `SPOKEN_PAGE_ABS_BASE_URL`
-  The Audiobookshelf URL Spoken Page should reach from inside Docker. This is not the browser URL for Spoken Page. Common examples:
-  `http://audiobookshelf:80` for the same compose stack,
-  `http://host.docker.internal:13378` for Docker Desktop on the same server,
-  `http://192.168.1.50:13378` for a Linux server or another machine on your network,
-  `https://example.com/audiobookshelf` if ABS is behind a subpath,
-  or `https://abs.example.com` if ABS already has a domain.
-- `SPOKEN_PAGE_ALLOWED_BASE_URLS`
-  Optional comma-separated list of exact Audiobookshelf URLs to allow instead of locking the app to one URL.
-- `SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS`
-  Optional `true` to let users type any server URL manually. This is less safe, so most installs should leave it off.
-
-Simple example:
-
-- If Audiobookshelf is at `http://192.168.1.50:13378`, then set
-  `SPOKEN_PAGE_ABS_BASE_URL=http://192.168.1.50:13378`
-- Your PCs or tablets would still open Spoken Page separately at
-  `http://192.168.1.50:3000`
-- If you see a reverse proxy error page such as `403 Forbidden` from `openresty`, the ABS URL usually points to the wrong host/path or the proxy is blocking the ABS API.
-
-3. From the project directory, run:
+4. Start the app:
 
 ```bash
 docker compose up -d
 ```
 
-4. Open:
+5. Open `http://localhost:3000` and sign in with your Audiobookshelf account.
 
-```text
-http://localhost:3000
-```
+The Compose configuration creates a persistent `spoken-page-data` volume for encrypted sessions and synced preferences.
 
-5. Enter a user API token in the app. If you did not lock the deployment to one ABS URL, enter the allowed server URL there as well.
+### Choosing the Audiobookshelf URL
 
-Included files:
+`SPOKEN_PAGE_ABS_BASE_URL` is the address Spoken Page reaches from inside its container—not necessarily the address in your browser.
 
-- [Dockerfile](Dockerfile)
-- [compose.yml](compose.yml)
-- [.env.example](.env.example)
+| Deployment | Example |
+| --- | --- |
+| ABS on the Docker host | `http://host.docker.internal:13378` |
+| Both apps in one Compose network | `http://audiobookshelf:80` |
+| ABS on another LAN machine | `http://192.168.1.50:13378` |
+| ABS behind HTTPS | `https://abs.example.com` |
+| ABS behind a reverse-proxy subpath | `https://example.com/audiobookshelf` |
 
-Published image:
+If several exact servers are permitted, set `SPOKEN_PAGE_ALLOWED_BASE_URLS` to a comma-separated allowlist. Avoid enabling `SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS` on an internet-facing deployment.
 
-```text
-ghcr.io/jcdesantis/spoken-page:latest
-```
+## Run from source
 
-If you want to pull it manually:
-
-```bash
-docker pull ghcr.io/jcdesantis/spoken-page:latest
-```
-
-If you want to build locally instead of pulling the published image:
-
-```bash
-docker build -t spoken-page .
-docker run --rm -p 3000:3000 --env-file .env spoken-page
-```
-
-### Windows Server Run
-
-If you do not want Docker, Spoken Page also runs directly as a Node.js server on Windows.
-
-Prerequisite:
-
-- Node.js 22 LTS recommended
-
-Recommended environment variables before starting:
-
-```powershell
-$env:SPOKEN_PAGE_SECRET="replace-this-with-a-long-random-string"
-$env:SPOKEN_PAGE_ABS_BASE_URL="http://192.168.1.20:13378"
-```
-
-Install and start:
+Node.js 22 LTS is recommended.
 
 ```bash
 npm install
+npm run dev
+```
+
+For a production build:
+
+```bash
 npm run build
 npm run start
 ```
 
-Then open:
+The development server defaults to `http://localhost:3000`.
 
-```text
-http://localhost:3000
-```
+## Configuration
 
-To expose it on your local network:
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `SPOKEN_PAGE_SECRET` | Production | Stable high-entropy key used to encrypt stored sessions |
+| `SPOKEN_PAGE_PREVIOUS_SECRETS` | No | Older comma-separated keys used during secret rotation |
+| `SPOKEN_PAGE_ABS_BASE_URL` | Recommended | Locks the deployment to one Audiobookshelf server |
+| `SPOKEN_PAGE_ALLOWED_BASE_URLS` | No | Allows additional exact Audiobookshelf base URLs |
+| `SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS` | No | Allows arbitrary user-entered server URLs; defaults to `false` |
+| `SPOKEN_PAGE_DATA_DIR` | No | Persistent storage location; Compose uses `/app/data` |
+
+Use HTTPS for public deployments and for reliable screen-wake behavior on iPad. Safari currently provides the strongest iPad PWA/fullscreen behavior.
+
+## Security model
+
+- Passwords are never persisted.
+- Audiobookshelf access and refresh tokens are encrypted at rest with AES-256-GCM.
+- Browsers receive only an opaque `httpOnly`, `sameSite` session cookie.
+- Production connections require a stable secret and a locked or allowlisted Audiobookshelf URL.
+- Proxy requests cannot leave the configured Audiobookshelf origin or configured base path.
+- API responses containing user data use private, no-store caching.
+- The Docker image runs as the unprivileged Node user.
+- Health (`/api/health`) and readiness (`/api/ready`) endpoints support deployment checks.
+
+Keep `.env` files private, rotate a compromised secret using `SPOKEN_PAGE_PREVIOUS_SECRETS`, and place internet-facing installations behind HTTPS and normal reverse-proxy protections.
+
+## Validation
 
 ```bash
-npm run start -- --hostname 0.0.0.0 --port 3000
+npm run typecheck
+npm test
+npm run build
+npm audit --omit=dev
 ```
 
-## Deployment Notes
+GitHub Actions runs type checking, tests, and the production build on pushes and pull requests. Pushes to `main` publish `ghcr.io/jcdesantis/spoken-page:latest`; version tags publish matching container tags.
 
-Spoken Page supports two main deployment styles:
+## Project map
 
-- Docker for repeatable, self-contained deployments
-- direct Node.js server run for simple local Windows installs
+- `src/app/api` — authenticated Audiobookshelf proxy, preferences, health, and playback endpoints
+- `src/components/dashboard.tsx` — library, shelves, filters, and book details
+- `src/components/player-panel.tsx` — playback, subtitles, chapters, queue, and sleep timer
+- `src/lib/audiobookshelf.ts` — connection policy and Audiobookshelf client
+- `src/lib/session-store.ts` — encrypted persistent sessions
+- `src/lib/user-settings.ts` — per-account cross-device preferences
+- `compose.yml` and `Dockerfile` — production container deployment
 
-Recommendation:
+## Companion project
 
-- use Docker when you want the cleanest deployment story
-- use direct Node.js on Windows when you want the fewest moving parts
-
-The app server itself is stateless. Spoken Page does not need its own persistent app-data volume to run. It depends on your Audiobookshelf server for actual library and playback state.
-
-If you want iPad screen wake to work reliably during playback, serve Spoken Page over `https://`. A plain LAN address such as `http://192.168.1.50:3000` can still let the device go to sleep.
-
-Security defaults:
-
-- Set `SPOKEN_PAGE_SECRET` in production so saved connections survive restarts and the stored connection cookie is signed with your own secret.
-- Set `SPOKEN_PAGE_ABS_BASE_URL` to lock the app to one Audiobookshelf server.
-- Set `SPOKEN_PAGE_ALLOWED_BASE_URLS` if you want to allow a short list of exact ABS URLs instead.
-- `SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS=true` restores the older behavior that lets users type any URL, but that is less safe and is not recommended for public deployments.
-
-Tablet note:
-
-- On iPad, Safari currently gives the best fullscreen experience with Spoken Page.
-- Firefox on iPad still works, but Apple browser limitations can prevent true device-level fullscreen or consistent screen wake behavior there.
-- Screen wake requires a secure context. If you open Spoken Page on an iPad at a plain LAN URL such as `http://192.168.1.50:3000`, Safari can still let the device sleep.
-- For reliable screen wake on iPad, serve Spoken Page over `https://` through a reverse proxy or other TLS setup.
-
-## GitHub Container Publishing
-
-This repo is set up to publish a container image to GitHub Container Registry through GitHub Actions:
-
-- validation workflow: [.github/workflows/ci.yml](.github/workflows/ci.yml)
-- workflow: [.github/workflows/publish-container.yml](.github/workflows/publish-container.yml)
-- image: `ghcr.io/jcdesantis/spoken-page`
-
-Publishing behavior:
-
-- pushes to `main` publish `:latest`
-- version tags like `v1.0.0` publish a matching tag
-- workflow dispatch can publish on demand
-
-GitHub-side note:
-
-- after the first publish, confirm the package visibility is set to `Public` in GitHub Packages if GitHub does not inherit public visibility automatically
-
-## Subtitle Support
-
-Spoken Page currently supports `.srt` subtitle files.
-
-Subtitle sources:
-
-- subtitle files attached to the audiobook in Audiobookshelf
-- a local `.srt` file uploaded in the browser
-
-Subtitle features:
-
-- active subtitle line display
-- subtitle source switching
-- subtitle offset adjustment
-- automatic subtitle loading when supported files are attached to the selected book
-
-## Companion App
-
-If you want help creating subtitle files for your Audiobookshelf library, see [Audiobook Forge](https://github.com/JCDeSantis/audiobookforge).
-
-Audiobook Forge is a companion app for generating subtitle files for Audiobookshelf-friendly workflows, which pairs naturally with Spoken Page's subtitle-aware player.
-
-## How It Works
-
-Spoken Page is built as a Next.js app with a small server-side proxy layer.
-
-That server layer is responsible for:
-
-- storing the Audiobookshelf connection in a signed `httpOnly` cookie
-- proxying Audiobookshelf API requests
-- proxying audio streams and cover images
-- keeping the Audiobookshelf token out of browser-side JavaScript
-
-This keeps the frontend simpler and avoids depending on direct browser-to-Audiobookshelf CORS behavior.
-
-## Project Structure
-
-Key parts of the app:
-
-- `src/app/api/*`
-  Next.js proxy routes for Audiobookshelf requests
-- `src/components/dashboard.tsx`
-  library browsing, filtering, recents, favorites, and player shell behavior
-- `src/components/player-panel.tsx`
-  playback control, subtitle rendering, chapter controls, and sync logic
-- `src/lib/audiobookshelf.ts`
-  Audiobookshelf request helpers
-- `src/app/globals.css`
-  theme, layout, and component styling
+[Audiobook Forge](https://github.com/JCDeSantis/audiobookforge) creates subtitle files that pair naturally with Spoken Page's subtitle-aware player.
 
 ## Credits
 
-Spoken Page is built specifically to work with Audiobookshelf, and this project would not exist without it.
-
-- Audiobookshelf GitHub: [advplyr/audiobookshelf](https://github.com/advplyr/audiobookshelf)
-- Audiobookshelf site: [audiobookshelf.org](https://www.audiobookshelf.org/)
-
-Audiobookshelf is the self-hosted server that provides the library, playback session, chapter, and progress infrastructure that Spoken Page builds on top of.
-
-## Notes
-
-- Spoken Page expects an existing Audiobookshelf server
-- Favorites and recent books are stored locally in the browser
-- The Audiobookshelf token is stored for this site in a signed `httpOnly` cookie
-- Production installs should set `SPOKEN_PAGE_SECRET`
-- Spoken Page is a companion surface for Audiobookshelf, not a replacement for it
+Spoken Page is a companion to [Audiobookshelf](https://www.audiobookshelf.org/) and depends on its library, metadata, playback session, and progress APIs. The project was built through AI-assisted development from an idea by a non-professional developer.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

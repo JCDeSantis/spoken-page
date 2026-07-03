@@ -1,5 +1,6 @@
 import Image from "next/image";
 import { ThemeToggleBar } from "@/components/theme-toggle-bar";
+import { APP_VERSION } from "@/lib/app-version";
 
 export function SpokenPageHeader() {
   return (
@@ -20,7 +21,10 @@ export function SpokenPageHeader() {
 
           <div className="page-header-copy">
             <div className="page-header-title-block">
-              <h1>Spoken <span>Page</span></h1>
+              <div className="page-header-title-row">
+                <h1>Spoken <span>Page</span></h1>
+                <span className="app-version">v{APP_VERSION}</span>
+              </div>
               <p>Subtitle-ready listening synced with Audiobookshelf</p>
             </div>
           </div>

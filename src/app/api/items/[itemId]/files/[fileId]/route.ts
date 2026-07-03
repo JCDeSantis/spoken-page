@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLibraryItemFile } from "@/lib/audiobookshelf";
+import { errorResponse, requireId } from "@/lib/server-api";
 
 type RouteContext = {
   params: Promise<{ itemId: string; fileId: string }>;
 };
 
 const FORWARDED_HEADERS = [
-  "cache-control",
   "content-length",
   "content-type",
   "etag",
@@ -15,7 +15,9 @@ const FORWARDED_HEADERS = [
 
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
-    const { itemId, fileId } = await context.params;
+    const { itemId: rawItemId, fileId: rawFileId } = await context.params;
+    const itemId = requireId(rawItemId, "Item ID");
+    const fileId = requireId(rawFileId, "File ID");
     const upstream = await getLibraryItemFile(itemId, fileId, {
       signal: request.signal,
     });
@@ -27,13 +29,13 @@ export async function GET(request: NextRequest, context: RouteContext) {
         responseHeaders.set(headerName, headerValue);
       }
     }
+    responseHeaders.set("cache-control", "private, no-store");
 
     return new NextResponse(upstream.body, {
       status: upstream.status,
       headers: responseHeaders,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load the subtitle file.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return errorResponse(error, "Unable to load the subtitle file.", request);
   }
 }

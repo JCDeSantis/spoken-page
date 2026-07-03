@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { absFetch } from "@/lib/audiobookshelf";
+import { errorResponse } from "@/lib/server-api";
 
 const FORWARDED_RESPONSE_HEADERS = [
   "accept-ranges",
-  "cache-control",
   "content-length",
   "content-range",
   "content-type",
@@ -38,13 +38,13 @@ export async function GET(request: NextRequest) {
         responseHeaders.set(headerName, headerValue);
       }
     }
+    responseHeaders.set("cache-control", "private, no-store");
 
     return new NextResponse(upstream.body, {
       status: upstream.status,
       headers: responseHeaders,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to stream audio.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return errorResponse(error, "Unable to stream audio.", request);
   }
 }

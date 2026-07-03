@@ -9,5 +9,21 @@ export default function manifest(): MetadataRoute.Manifest {
     display: "standalone",
     background_color: "#08050a",
     theme_color: "#08050a",
+    scope: "/",
+    icons: [
+      {
+        src: "/spoken-page-logo.png",
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "maskable",
+      },
+    ],
+    shortcuts: [
+      {
+        name: "Open library",
+        short_name: "Library",
+        url: "/",
+      },
+    ],
   };
 }

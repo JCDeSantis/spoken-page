@@ -115,6 +115,7 @@ export type PlaybackSession = {
 };
 
 export type AuthorizedSummary = {
+  userId: string;
   username: string;
   userType: string;
   serverVersion: string;

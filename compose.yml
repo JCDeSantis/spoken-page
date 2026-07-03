@@ -3,10 +3,23 @@ services:
     image: ghcr.io/jcdesantis/spoken-page:latest
     container_name: spoken-page
     environment:
-      SPOKEN_PAGE_SECRET: ${SPOKEN_PAGE_SECRET:-}
-      SPOKEN_PAGE_ABS_BASE_URL: ${SPOKEN_PAGE_ABS_BASE_URL:-}
+      SPOKEN_PAGE_SECRET: ${SPOKEN_PAGE_SECRET:?Set a stable high-entropy SPOKEN_PAGE_SECRET}
+      SPOKEN_PAGE_PREVIOUS_SECRETS: ${SPOKEN_PAGE_PREVIOUS_SECRETS:-}
+      SPOKEN_PAGE_ABS_BASE_URL: ${SPOKEN_PAGE_ABS_BASE_URL:?Set the Audiobookshelf server URL}
       SPOKEN_PAGE_ALLOWED_BASE_URLS: ${SPOKEN_PAGE_ALLOWED_BASE_URLS:-}
       SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS: ${SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS:-false}
+      SPOKEN_PAGE_DATA_DIR: /app/data
     ports:
       - "3000:3000"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    volumes:
+      - spoken-page-data:/app/data
+
+volumes:
+  spoken-page-data:

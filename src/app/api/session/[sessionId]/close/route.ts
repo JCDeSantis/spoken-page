@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { closeSession } from "@/lib/audiobookshelf";
+import { errorResponse, playbackPayload, privateJson, requireId } from "@/lib/server-api";
 
 type RouteContext = {
   params: Promise<{ sessionId: string }>;
@@ -7,16 +8,12 @@ type RouteContext = {
 
 export async function POST(request: NextRequest, context: RouteContext) {
   try {
-    const payload = (await request.json()) as {
-      currentTime: number;
-      timeListened: number;
-      duration: number;
-    };
-    const { sessionId } = await context.params;
+    const payload = playbackPayload(await request.json());
+    const { sessionId: rawSessionId } = await context.params;
+    const sessionId = requireId(rawSessionId, "Session ID");
     const session = await closeSession(sessionId, payload);
-    return NextResponse.json({ ok: true, session });
+    return privateJson({ ok: true, session });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to close the playback session.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return errorResponse(error, "Unable to close the playback session.", request);
   }
 }

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "@/app/globals.css";
+import { PwaStatus } from "@/components/pwa-status";
 
 export const metadata: Metadata = {
   title: "Spoken Page",
@@ -33,7 +34,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <meta content="yes" name="mobile-web-app-capable" />
         <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
       </head>
-      <body>{children}</body>
+      <body>
+        <PwaStatus />
+        {children}
+      </body>
     </html>
   );
 }
