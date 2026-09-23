@@ -2,7 +2,7 @@
 
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
 import { LibraryItemExpanded, LibraryItemMinified } from "@/lib/types";
-import { BookProgressStatus, formatDuration } from "./library-utils";
+import { BookProgressStatus, formatDuration, seriesDisplay } from "./library-utils";
 
 type Props = {
   item: LibraryItemExpanded | null;
@@ -11,6 +11,7 @@ type Props = {
   nextInSeries: LibraryItemMinified | null;
   queue: LibraryItemMinified[];
   onResume: () => void;
+  onSelectSeries: () => void;
   onAddToQueue: (item: LibraryItemMinified) => void;
   onRemoveFromQueue: (id: string) => void;
   onSelectQueued: (id: string) => void;
@@ -18,10 +19,44 @@ type Props = {
   onStatusChange: (status: BookProgressStatus | null) => void;
 };
 
+function descriptionToText(source: string) {
+  const parser = new DOMParser();
+  let document = parser.parseFromString(source, "text/html");
+  // Some libraries store escaped HTML instead of markup.
+  if (!document.body.children.length && /<\/?[a-z][^>]*>/i.test(document.body.textContent ?? "")) {
+    document = parser.parseFromString(document.body.textContent ?? "", "text/html");
+  }
+  document.querySelectorAll("script, style, template, noscript").forEach((node) => node.remove());
+
+  function visit(node: Node): string {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    const element = node as Element;
+    if (element.tagName === "BR") return "\n";
+    const content = Array.from(element.childNodes, visit).join("");
+    return /^(P|DIV|SECTION|ARTICLE|BLOCKQUOTE|LI|H[1-6]|UL|OL)$/i.test(element.tagName)
+      ? `${content}\n\n`
+      : content;
+  }
+
+  return Array.from(document.body.childNodes, visit).join("")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function BookSynopsis({ description }: { description: string }) {
   const paragraphRef = useRef<HTMLParagraphElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [canExpand, setCanExpand] = useState(false);
+  const [plainDescription, setPlainDescription] = useState<{ source: string; text: string } | null>(null);
+  const text = plainDescription?.source === description ? plainDescription.text : "";
+
+  useEffect(() => {
+    setPlainDescription({ source: description, text: descriptionToText(description) });
+  }, [description]);
 
   useEffect(() => {
     setExpanded(false);
@@ -39,7 +74,7 @@ function BookSynopsis({ description }: { description: string }) {
     const observer = new ResizeObserver(measure);
     observer.observe(paragraph);
     return () => observer.disconnect();
-  }, [description, expanded]);
+  }, [text, expanded]);
 
   function toggleExpanded() {
     if (canExpand) setExpanded((current) => !current);
@@ -63,7 +98,7 @@ function BookSynopsis({ description }: { description: string }) {
         role={canExpand ? "button" : undefined}
         tabIndex={canExpand ? 0 : undefined}
       >
-        {description}
+        {text}
       </p>
       {canExpand ? (
         <button className="book-details-synopsis-toggle" onClick={toggleExpanded} type="button">
@@ -74,17 +109,22 @@ function BookSynopsis({ description }: { description: string }) {
   );
 }
 
-export function BookDetails({ item, loading, error, nextInSeries, queue, onResume, onAddToQueue, onRemoveFromQueue, onSelectQueued, status, onStatusChange }: Props) {
+export function BookDetails({ item, loading, error, nextInSeries, queue, onResume, onSelectSeries, onAddToQueue, onRemoveFromQueue, onSelectQueued, status, onStatusChange }: Props) {
   if (loading) return <aside className="book-details-card" aria-live="polite">Loading book details…</aside>;
   if (error) return <aside className="book-details-card status-error" role="alert">{error}</aside>;
   if (!item) return null;
   const progress = item.userMediaProgress;
   const remaining = Math.max(0, item.media.duration - (progress?.currentTime ?? 0));
+  const series = seriesDisplay(item.media.metadata.seriesName);
   return (
     <aside className="book-details-card" aria-label="Selected book details">
       <img alt="" src={`/api/items/${item.id}/cover`} />
       <div className="book-details-copy">
-        <p className="eyebrow">{item.media.metadata.seriesName ?? "Book details"}</p>
+        {series.name ? (
+          <button className="eyebrow book-details-series" onClick={onSelectSeries} title={`Filter by ${series.name}`} type="button">
+            {series.name}{series.number ? ` · Book ${series.number}` : ""}
+          </button>
+        ) : <p className="eyebrow">Book details</p>}
         <h3>{item.media.metadata.title}</h3>
         {item.media.metadata.subtitle ? <p className="book-details-subtitle">{item.media.metadata.subtitle}</p> : null}
         <p>{item.media.metadata.authorName ?? "Unknown author"}{item.media.metadata.narratorName ? ` · Narrated by ${item.media.metadata.narratorName}` : ""}</p>

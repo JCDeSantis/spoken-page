@@ -12,6 +12,7 @@ import {
   ProgressFilter,
   selectedBookStatus,
   sortLibraryItems,
+  stripSeriesSuffix,
 } from "@/components/library/library-utils";
 import {
   AuthorizedSummary,
@@ -88,10 +89,6 @@ function normalizeValue(value: string | null | undefined) {
   return (value ?? "").trim().toLowerCase();
 }
 
-function collapseWhitespace(value: string | null | undefined) {
-  return (value ?? "").trim().replace(/\s+/g, " ");
-}
-
 function compareByLabel(left: string, right: string) {
   return left.localeCompare(right, undefined, { sensitivity: "base" });
 }
@@ -124,41 +121,6 @@ function matchesDelimitedValue(value: string | null | undefined, selected: strin
   }
 
   return collectNames(value).some((entry) => normalizeValue(entry) === normalizedSelected);
-}
-
-function stripSeriesSuffix(value: string | null | undefined) {
-  const collapsed = collapseWhitespace(value);
-
-  if (!collapsed) {
-    return "";
-  }
-
-  const labeledSuffixRemoved = collapsed
-    .replace(/(?:\s*[-,:]\s*)?(?:book|bk|volume|vol(?:ume)?|part)\s*\d+(?:\.\d+)?$/i, "")
-    .replace(/(?:\s*[-,:]\s*)?#\s*\d+(?:\.\d+)?$/i, "")
-    .trim();
-
-  if (labeledSuffixRemoved !== collapsed) {
-    return labeledSuffixRemoved;
-  }
-
-  const separatedNumberMatch = collapsed.match(/^(.*\S)\s*[-:]\s*\d+(?:\.\d+)?$/);
-  if (separatedNumberMatch) {
-    const base = separatedNumberMatch[1].trim();
-    if (base.split(/\s+/).length > 1) {
-      return base;
-    }
-  }
-
-  const bareNumberMatch = collapsed.match(/^(.*\S)\s+\d+(?:\.\d+)?$/);
-  if (bareNumberMatch) {
-    const base = bareNumberMatch[1].trim();
-    if (base.split(/\s+/).length > 1) {
-      return base;
-    }
-  }
-
-  return collapsed;
 }
 
 function getSeriesFilterKey(value: string | null | undefined) {
@@ -795,7 +757,17 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     const isFavorite = favoriteIds.includes(entry.id);
     const isSelected = entry.id === selectedItemId;
 
-    return <BookTile key={`${section}-${entry.id}`} item={entry} compact={section !== "all"} favorite={isFavorite} selected={isSelected} status={statusOverrides[entry.id]} onSelect={() => handleBookSelect(entry.id)} onToggleFavorite={() => toggleFavorite(entry.id)} onDismiss={section === "recent" ? () => dismissRecent(entry.id) : undefined} />;
+    return <BookTile key={`${section}-${entry.id}`} item={entry} compact={section !== "all"} favorite={isFavorite} selected={isSelected} status={statusOverrides[entry.id]} onSelect={() => handleBookSelect(entry.id)} onSelectSeries={() => showSeries(entry.media.metadata.seriesName)} onToggleFavorite={() => toggleFavorite(entry.id)} onDismiss={section === "recent" ? () => dismissRecent(entry.id) : undefined} />;
+  }
+
+  function showSeries(seriesName: string | null | undefined) {
+    const name = stripSeriesSuffix(seriesName);
+    if (!name) return;
+    setFilter("");
+    setProgressFilter("all");
+    setBrowseFilters({ ...EMPTY_BROWSE_FILTERS, series: name });
+    closeBookDetails(false);
+    requestAnimationFrame(() => document.getElementById("book-library")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
   return (
@@ -871,7 +843,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
           </section>
         </div>
 
-        <section className="library-section-card library-section-main">
+        <section className="library-section-card library-section-main" id="book-library">
           <div className="library-section-head">
             <div>
               <h3>Book Library</h3>
@@ -1149,6 +1121,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
                 handleBookSelect(id);
               }}
               onResume={handleResume}
+              onSelectSeries={() => showSeries(selectedItem?.media.metadata.seriesName)}
               status={selectedBookStatus(selectedItem ? statusOverrides[selectedItem.id] : undefined)}
               onStatusChange={(status) => {
                 if (selectedItem) setBookStatus(selectedItem.id, status);

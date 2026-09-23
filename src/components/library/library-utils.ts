@@ -9,6 +9,33 @@ export function normalized(value: string | null | undefined) {
   return (value ?? "").trim().toLocaleLowerCase();
 }
 
+export function stripSeriesSuffix(value: string | null | undefined) {
+  const collapsed = (value ?? "").trim().replace(/\s+/g, " ");
+  if (!collapsed) return "";
+
+  const labeled = collapsed
+    .replace(/(?:\s*[-,:]\s*)?(?:book|bk|volume|vol(?:ume)?|part)\s*\d+(?:\.\d+)?$/i, "")
+    .replace(/(?:\s*[-,:]\s*)?#\s*\d+(?:\.\d+)?$/i, "")
+    .trim();
+  if (labeled !== collapsed) return labeled;
+
+  const separated = collapsed.match(/^(.*\S)\s*[-:]\s*\d+(?:\.\d+)?$/);
+  if (separated && separated[1].trim().split(/\s+/).length > 1) return separated[1].trim();
+
+  const bare = collapsed.match(/^(.*\S)\s+\d+(?:\.\d+)?$/);
+  if (bare && bare[1].trim().split(/\s+/).length > 1) return bare[1].trim();
+
+  return collapsed;
+}
+
+export function seriesDisplay(value: string | null | undefined) {
+  const name = stripSeriesSuffix(value);
+  const full = (value ?? "").trim().replace(/\s+/g, " ");
+  const suffix = full.slice(name.length);
+  const number = name !== full ? suffix.match(/(\d+(?:\.\d+)?)\s*$/)?.[1] : undefined;
+  return { name, number: number ?? null };
+}
+
 export function seriesIdentity(value: string | null | undefined) {
   return normalized(value)
     .replace(/(?:\s*[-,:]\s*)?(?:book|bk|volume|vol(?:ume)?|part)\s*\d+(?:\.\d+)?$/i, "")

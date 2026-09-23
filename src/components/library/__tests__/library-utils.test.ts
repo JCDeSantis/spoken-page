@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getSeriesNext, selectedBookStatus, seriesPosition, sortLibraryItems } from "@/components/library/library-utils";
+import { getSeriesNext, selectedBookStatus, seriesDisplay, seriesPosition, sortLibraryItems, stripSeriesSuffix } from "@/components/library/library-utils";
 import type { LibraryItemMinified } from "@/lib/types";
 
 function book(id: string, title: string, seriesName?: string, currentTime = 0): LibraryItemMinified {
@@ -18,6 +18,14 @@ describe("library utilities", () => {
     const second = book("2", "Middle", "Saga Book 2");
     expect(getSeriesNext([second, first], first)?.id).toBe("2");
     expect(seriesPosition("Saga, Volume 2.5")).toBe(2.5);
+  });
+
+  it("shows a clean series name and book number across common suffix formats", () => {
+    expect(seriesDisplay("Saga Book 2")).toEqual({ name: "Saga", number: "2" });
+    expect(seriesDisplay("A Long Series Name, Volume 2.5")).toEqual({ name: "A Long Series Name", number: "2.5" });
+    expect(seriesDisplay("Saga #3")).toEqual({ name: "Saga", number: "3" });
+    expect(seriesDisplay("Saga")).toEqual({ name: "Saga", number: null });
+    expect(stripSeriesSuffix("A Long Series Name - 4")).toBe("A Long Series Name");
   });
 
   it("sorts without mutating input and defaults status to empty", () => {

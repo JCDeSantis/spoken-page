@@ -1,6 +1,13 @@
-# Spoken Page v1.1.0 patch notes
+# Spoken Page patch notes
 
-Released July 3, 2026.
+## v1.1.1 — September 23, 2026
+
+- Widened book cards and placed the series name and book number inside each card.
+- Added clickable series names on cards and book details to filter the library.
+- Added full-name hover text for book titles, authors, and series names on cards.
+- Converted HTML-formatted book descriptions into readable text with paragraph breaks.
+
+## v1.1.0 — July 3, 2026
 
 Version 1.1 turns Spoken Page from a single-device companion player into a persistent, account-aware Audiobookshelf experience with a redesigned library and a substantially more capable player.
 

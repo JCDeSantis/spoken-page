@@ -854,6 +854,22 @@ img {
   font-size: clamp(1.35rem, 3vw, 2rem);
 }
 
+.book-details-series {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--signal);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.book-details-series:hover,
+.book-details-series:focus-visible {
+  text-decoration: underline;
+}
+
 .book-details-subtitle,
 .book-details-description,
 .up-next-note {
@@ -863,6 +879,7 @@ img {
 .book-details-description {
   display: -webkit-box;
   overflow: hidden;
+  white-space: pre-line;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 5;
   line-height: 1.55;
@@ -1244,6 +1261,7 @@ img {
 .button:focus-visible,
 .icon-button:focus-visible,
 .book-tile-select:focus-visible,
+.book-tile-series:focus-visible,
 .favorite-chip:focus-visible,
 .recent-chip:focus-visible,
 .filter-chip-pill:focus-visible,
@@ -1326,38 +1344,47 @@ img {
 
 .book-tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 0.65rem;
 }
 
 .book-tile-grid-featured {
-  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
 }
 
 .book-tile {
   position: relative;
+  display: flex;
+  flex-direction: column;
   min-height: 100%;
+  min-width: 0;
+  padding: 0.46rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--book-card-bg);
 }
 
 .book-tile-select {
   width: 100%;
-  height: 100%;
-  padding: 0.46rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
   text-align: left;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: var(--book-card-bg);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
   display: grid;
   gap: 0.4rem;
   grid-template-rows: auto 1fr;
   align-content: start;
+  cursor: pointer;
 }
 
-.book-tile-select:hover {
+.book-tile:hover {
   transform: translateY(-1px);
 }
 
-.book-tile-active .book-tile-select {
+.book-tile-active {
   border-color: var(--book-card-active-border);
   background: var(--book-card-active-bg);
 }
@@ -1370,12 +1397,41 @@ img {
   background: var(--cover-bg);
 }
 
-.book-tile-copy {
-  display: grid;
-  gap: 0.12rem;
+.book-tile-series {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  margin-top: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--signal);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: left;
 }
 
-.book-tile-copy strong {
+.book-tile-series:hover,
+.book-tile-series:focus-visible {
+  text-decoration: underline;
+}
+
+.book-tile-series-name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.book-tile-series-number {
+  flex: none;
+  font-weight: 700;
+}
+
+.book-tile-title {
   display: -webkit-box;
   overflow: hidden;
   font-size: 0.84rem;
@@ -1384,13 +1440,16 @@ img {
   -webkit-line-clamp: 2;
 }
 
-.book-tile-copy span {
-  display: -webkit-box;
+.book-tile-author {
+  display: block;
   overflow: hidden;
+  min-width: 0;
+  margin-top: 0.12rem;
   font-size: 0.73rem;
   line-height: 1.2;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .favorite-chip {
@@ -2638,7 +2697,7 @@ img {
   }
 
   .book-tile-grid {
-    grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   }
 
   .subtitle-tools-grid {
