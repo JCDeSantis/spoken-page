@@ -5,6 +5,28 @@ export type ProgressFilter = "all" | "planned" | "unstarted" | "in-progress" | "
 export type BookProgressStatus = Exclude<ProgressFilter, "all">;
 export type BookStatusOverrides = Record<string, BookProgressStatus>;
 
+export function unloadedShelfIds(
+  ids: string[],
+  pagedItems: LibraryItemMinified[],
+  cachedItems: Record<string, LibraryItemMinified>,
+  requestedIds: Set<string>,
+) {
+  const pagedIds = new Set(pagedItems.map((item) => item.id));
+  return [...new Set(ids)].filter((id) => id && !pagedIds.has(id) && !cachedItems[id] && !requestedIds.has(id));
+}
+
+export function libraryItemsById(
+  libraryId: string,
+  pagedItems: LibraryItemMinified[],
+  cachedItems: Record<string, LibraryItemMinified>,
+) {
+  return new Map<string, LibraryItemMinified>(
+    [...Object.values(cachedItems), ...pagedItems]
+      .filter((item) => item.libraryId === libraryId)
+      .map((item) => [item.id, item] as const),
+  );
+}
+
 export function normalized(value: string | null | undefined) {
   return (value ?? "").trim().toLocaleLowerCase();
 }

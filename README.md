@@ -1,6 +1,6 @@
 # Spoken Page
 
-![Version](https://img.shields.io/badge/version-v1.1.1-ff5664?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-v1.1.2-ff5664?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-163434?style=for-the-badge)
 
 ![Spoken Page logo](public/spoken-page-logo-trimmed.png)

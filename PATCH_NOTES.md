@@ -1,5 +1,10 @@
 # Spoken Page patch notes
 
+## v1.1.2 — September 23, 2026
+
+- Saved, recently played, and queued books now load into their shelves even when they are beyond the first page of the library.
+- Kept the main library paginated so large collections still load in manageable pages.
+
 ## v1.1.1 — September 23, 2026
 
 - Widened book cards and placed the series name and book number inside each card.

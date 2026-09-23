@@ -6,6 +6,7 @@ import { BookDetails } from "@/components/library/book-details";
 import { BookTile } from "@/components/library/book-tile";
 import {
   getSeriesNext,
+  libraryItemsById,
   BookProgressStatus,
   BookStatusOverrides,
   LibrarySort,
@@ -13,6 +14,7 @@ import {
   selectedBookStatus,
   sortLibraryItems,
   stripSeriesSuffix,
+  unloadedShelfIds,
 } from "@/components/library/library-utils";
 import {
   AuthorizedSummary,
@@ -276,7 +278,11 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   const [queueIds, setQueueIds] = useState<string[]>([]);
   const [statusOverrides, setStatusOverrides] = useState<BookStatusOverrides>({});
   const [itemsPage, setItemsPage] = useState<{ total: number; page: number; limit: number } | null>(null);
+  const [itemsLibraryId, setItemsLibraryId] = useState("");
+  const [shelfItemsById, setShelfItemsById] = useState<Record<string, LibraryItemMinified>>({});
+  const [resolvedShelfIds, setResolvedShelfIds] = useState<Set<string>>(() => new Set());
   const [preferencesHydrated, setPreferencesHydrated] = useState(false);
+  const requestedShelfIdsRef = useRef(new Set<string>());
   const libraryPreferencesRef = useRef({ favoriteIds: [] as string[], playedRecentIds: [] as string[], hiddenRecentIds: [] as string[], queueIds: [] as string[], statusOverrides: {} as BookStatusOverrides });
   const libraryPreferencesDirtyRef = useRef(false);
   const bookDetailsTriggerRef = useRef<HTMLElement | null>(null);
@@ -311,6 +317,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   async function loadItems(libraryId: string) {
     if (!libraryId) {
       setItems([]);
+      setItemsLibraryId("");
       setSelectedItem(null);
       return;
     }
@@ -334,6 +341,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     }
 
     setItems(payload.results);
+    setItemsLibraryId(libraryId);
     setItemsPage(
       typeof payload.total === "number" && typeof payload.page === "number" && typeof payload.limit === "number"
         ? { total: payload.total, page: payload.page, limit: payload.limit }
@@ -594,6 +602,43 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   }, [activeLibraryId]);
 
   useEffect(() => {
+    if (!activeLibraryId || itemsLibraryId !== activeLibraryId || !preferencesHydrated) return;
+
+    const ids = unloadedShelfIds(
+      [...favoriteIds, ...playedRecentIds, ...queueIds],
+      items,
+      shelfItemsById,
+      requestedShelfIdsRef.current,
+    );
+    if (!ids.length) return;
+    ids.forEach((id) => requestedShelfIdsRef.current.add(id));
+
+    void (async () => {
+      for (let offset = 0; offset < ids.length; offset += 4) {
+        const batch = ids.slice(offset, offset + 4);
+        const fetched = await Promise.all(batch.map(async (id) => {
+          try {
+            const response = await fetch(`/api/items/${encodeURIComponent(id)}`);
+            if (!response.ok) return null;
+            const item = (await response.json()) as LibraryItemMinified;
+            return item.id === id && item.mediaType === "book" && item.media?.metadata?.title ? item : null;
+          } catch {
+            return null;
+          }
+        }));
+        const found = fetched.filter((item): item is LibraryItemMinified => item !== null);
+        if (found.length) {
+          setShelfItemsById((current) => ({
+            ...current,
+            ...Object.fromEntries(found.map((item) => [item.id, item])),
+          }));
+        }
+        setResolvedShelfIds((current) => new Set([...current, ...batch]));
+      }
+    })();
+  }, [activeLibraryId, favoriteIds, items, itemsLibraryId, playedRecentIds, preferencesHydrated, queueIds, shelfItemsById]);
+
+  useEffect(() => {
     void loadFilterData(activeLibraryId);
     setBrowseFilters({ ...EMPTY_BROWSE_FILTERS });
   }, [activeLibraryId]);
@@ -720,7 +765,14 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     }), sort, statusOverrides);
   }, [browseFilters, filter, items, progressFilter, sort, statusOverrides]);
 
-  const itemsById = useMemo(() => new Map(items.map((entry) => [entry.id, entry])), [items]);
+  const itemsById = useMemo(
+    () => libraryItemsById(activeLibraryId, items, shelfItemsById),
+    [activeLibraryId, items, shelfItemsById],
+  );
+
+  const favoritesLoading = !preferencesHydrated || favoriteIds.some((id) => !itemsById.has(id) && !resolvedShelfIds.has(id));
+  const recentsLoading = !preferencesHydrated || playedRecentIds.some((id) =>
+    !hiddenRecentIds.includes(id) && !itemsById.has(id) && !resolvedShelfIds.has(id));
 
   const favoriteItems = useMemo(
     () =>
@@ -818,7 +870,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
               </div>
             ) : (
               <p className="status-message">
-                Save books here so the ones you revisit often stay pinned to the top.
+                {favoritesLoading ? "Finding saved books…" : "Save books here so the ones you revisit often stay pinned to the top."}
               </p>
             )}
           </section>
@@ -837,7 +889,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
               </div>
             ) : (
               <p className="status-message">
-                Recently opened or in-progress books will appear here for quicker return trips.
+                {recentsLoading ? "Finding recent books…" : "Recently opened or in-progress books will appear here for quicker return trips."}
               </p>
             )}
           </section>

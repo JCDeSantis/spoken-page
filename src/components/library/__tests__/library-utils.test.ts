@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getSeriesNext, selectedBookStatus, seriesDisplay, seriesPosition, sortLibraryItems, stripSeriesSuffix } from "@/components/library/library-utils";
+import { getSeriesNext, libraryItemsById, selectedBookStatus, seriesDisplay, seriesPosition, sortLibraryItems, stripSeriesSuffix, unloadedShelfIds } from "@/components/library/library-utils";
 import type { LibraryItemMinified } from "@/lib/types";
 
 function book(id: string, title: string, seriesName?: string, currentTime = 0): LibraryItemMinified {
@@ -43,5 +43,22 @@ describe("library utilities", () => {
     expect(selectedBookStatus("planned")).toBe("planned");
     expect(selectedBookStatus("unstarted")).toBe("unstarted");
     expect(sortLibraryItems([started, untouched], "progress", { untouched: "finished" })[0]?.id).toBe("untouched");
+  });
+
+  it("resolves saved and recent books beyond the paginated library without changing that page", () => {
+    const firstPage = [book("first", "First")];
+    const offPage = book("saved", "Saved");
+    const otherLibrary = { ...book("other", "Other"), libraryId: "different-library" };
+    const ids = unloadedShelfIds(
+      ["saved", "saved", "first", "other"],
+      firstPage,
+      {},
+      new Set(),
+    );
+
+    expect(ids).toEqual(["saved", "other"]);
+    expect(unloadedShelfIds(ids, firstPage, { saved: offPage }, new Set(["other"]))).toEqual([]);
+    expect([...libraryItemsById("library", firstPage, { saved: offPage, other: otherLibrary }).keys()]).toEqual(["saved", "first"]);
+    expect(firstPage).toHaveLength(1);
   });
 });
