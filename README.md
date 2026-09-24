@@ -1,23 +1,20 @@
 # Spoken Page
 
-![Version](https://img.shields.io/badge/version-v1.1.2-ff5664?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-v1.2.0-ff5664?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-163434?style=for-the-badge)
 
 ![Spoken Page logo](public/spoken-page-logo-trimmed.png)
 
 Spoken Page is a responsive, subtitle-first web player for [Audiobookshelf](https://github.com/advplyr/audiobookshelf). It keeps Audiobookshelf as the source of truth while adding a focused library and listening experience for desktop, tablet, and installable PWA use.
 
-## What v1.1 adds
+## What v1.2 adds
 
-- Audiobookshelf account sign-in with encrypted, persistent server-side sessions
-- Cross-device favorites, recents, queues, reading status, and player preferences
-- A redesigned library with search, sorting, filters, saved and recently played shelves
-- Book detail modals with expandable synopses and manual reading status
-- A compact, tablet-friendly player with chapters, queue controls, speed, sleep timer, and keyboard shortcuts
-- Subtitle discovery and local `.srt`/`.vtt` upload with per-book timing offsets
-- PWA installation, offline shell support, health/readiness endpoints, and Docker persistence
+- A responsive cover gallery with a black and dark red theme
+- Compact Pinned books that sync with your account and carry forward existing saved books
+- Continue listening with progress, remaining time, Resume, and Mark complete
+- Cleaner spacing from phone to wide desktop screens while keeping the Spoken Page logo and version pill
 
-See [PATCH_NOTES.md](PATCH_NOTES.md) for the complete v1.1 release notes.
+See [PATCH_NOTES.md](PATCH_NOTES.md) for the complete release notes, including earlier versions.
 
 ## Highlights
 
@@ -25,8 +22,9 @@ See [PATCH_NOTES.md](PATCH_NOTES.md) for the complete v1.1 release notes.
 
 - Browse every audiobook library available to your Audiobookshelf account
 - Search and filter by author, narrator, genre, series, and manual reading status
-- Sort books and browse favorites, recently played titles, and saved queues
-- Open a book without adding it to recents; a title becomes recent only after playback starts
+- Sort books and keep frequently used titles in a synced Pinned books section
+- Resume the most recently updated unfinished book or mark it complete in Audiobookshelf
+- Open a book without changing its listening history; a title becomes recent only after playback starts
 - Set a book to Planned, In Progress, or Completed—or leave its status blank
 - Expand long synopses directly in the book details modal
 - Queue the next book in a series

@@ -1,5 +1,4 @@
 import Image from "next/image";
-import { ThemeToggleBar } from "@/components/theme-toggle-bar";
 import { APP_VERSION } from "@/lib/app-version";
 
 export function SpokenPageHeader() {
@@ -30,7 +29,6 @@ export function SpokenPageHeader() {
           </div>
         </div>
 
-        <ThemeToggleBar className="page-header-theme" compact />
       </div>
     </header>
   );

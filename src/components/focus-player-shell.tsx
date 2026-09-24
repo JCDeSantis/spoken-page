@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { PlayerPanel } from "@/components/player-panel";
-import { ThemeToggleBar } from "@/components/theme-toggle-bar";
 import { LibraryItemExpanded } from "@/lib/types";
 
 type FocusPlayerShellProps = {
@@ -55,7 +54,6 @@ export function FocusPlayerShell({ itemId, preferenceScope }: FocusPlayerShellPr
         <a className="button button-secondary" href="/">
           Back to library
         </a>
-        <ThemeToggleBar className="theme-toolbar-inline" />
       </div>
 
       {state === "loading" ? <p className="status-message">Loading focused player...</p> : null}

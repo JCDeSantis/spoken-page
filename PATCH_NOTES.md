@@ -1,5 +1,14 @@
 # Spoken Page patch notes
 
+## v1.2.0 — September 24, 2026
+
+- Refreshed the library with a responsive cover gallery, a black canvas, dark red surfaces, and the existing Spoken Page red for accents and section counts.
+- Replaced Favorites with compact Pinned books. Existing saved books become pins automatically and remain synced to the user's account; empty pinned sections stay hidden.
+- Added Continue listening for the most recently updated unfinished book, with clearer progress, remaining time, Resume, and Mark complete actions.
+- Mark complete now updates Audiobookshelf progress and Spoken Page reading status, then removes the book from Continue listening.
+- Kept the Spoken Page logo, header typography, and version pill while removing the light theme and its toggle.
+- Tightened section and search spacing across phone, tablet, and wide desktop layouts.
+
 ## v1.1.2 — September 23, 2026
 
 - Saved, recently played, and queued books now load into their shelves even when they are beyond the first page of the library.

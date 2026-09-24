@@ -10,24 +10,46 @@ type Props = {
   onSelect: () => void;
   onSelectSeries: () => void;
   onToggleFavorite: () => void;
-  onDismiss?: () => void;
 };
 
-export function BookTile({ item, compact, favorite, selected, status: savedStatus, onSelect, onSelectSeries, onToggleFavorite, onDismiss }: Props) {
+export function BookTile({ item, compact, favorite, selected, status: savedStatus, onSelect, onSelectSeries, onToggleFavorite }: Props) {
   const status = selectedBookStatus(savedStatus);
   const series = seriesDisplay(item.media.metadata.seriesName);
   const author = item.media.metadata.authorName ?? "Unknown author";
+  const progress = item.userMediaProgress;
+  const progressPercent = progress && progress.currentTime > 0
+    ? Math.round(Math.min(100, progress.currentTime / (progress.duration || item.media.duration || 1) * 100))
+    : 0;
   const statusLabel = status === "finished"
     ? "Completed"
     : status === "in-progress"
-      ? "In progress"
+      ? `In progress${progressPercent ? ` · ${progressPercent}%` : ""}`
       : status === "planned"
         ? "Planned"
         : status === "unstarted"
           ? "Not started"
-          : null;
+          : progress?.isFinished
+            ? "Completed"
+            : progressPercent > 0
+              ? `In progress · ${progressPercent}%`
+              : null;
+  if (compact) {
+    return (
+      <article className={`book-tile book-tile-compact ${selected ? "book-tile-active" : ""}`}>
+        <button className="book-tile-compact-select" onClick={onSelect} type="button">
+          <img alt="" className="book-tile-cover" src={`/api/items/${item.id}/cover`} />
+          <span className="book-tile-compact-copy">
+            <strong className="book-tile-title" title={item.media.metadata.title}>{item.media.metadata.title}</strong>
+            <span className="book-tile-author" title={author}>{author}</span>
+            {statusLabel ? <span className="book-progress-label">{statusLabel}</span> : null}
+          </span>
+        </button>
+        <button aria-label={`Unpin ${item.media.metadata.title}`} aria-pressed="true" className="favorite-chip favorite-chip-active" onClick={onToggleFavorite} type="button">Unpin</button>
+      </article>
+    );
+  }
   return (
-    <article className={`book-tile ${selected ? "book-tile-active" : ""} ${compact ? "book-tile-compact" : ""}`}>
+    <article className={`book-tile ${selected ? "book-tile-active" : ""}`}>
       <button className="book-tile-select" onClick={onSelect} type="button">
         <img alt="" className="book-tile-cover" src={`/api/items/${item.id}/cover`} />
         <strong className="book-tile-title" title={item.media.metadata.title}>{item.media.metadata.title}</strong>
@@ -41,10 +63,14 @@ export function BookTile({ item, compact, favorite, selected, status: savedStatu
       <span className="book-tile-author" title={author}>{author}</span>
       {status && statusLabel ? (
         <span className={`book-progress-label book-progress-${status}`}>{statusLabel}</span>
+      ) : statusLabel ? <span className="book-progress-label">{statusLabel}</span> : null}
+      {progressPercent > 0 && !progress?.isFinished && status !== "finished" ? (
+        <span className="book-tile-progress" role="progressbar" aria-label={`${item.media.metadata.title} listening progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent}>
+          <span style={{ width: `${progressPercent}%` }} />
+        </span>
       ) : null}
-      {onDismiss ? <button aria-label="Remove from recent books" className="recent-chip" onClick={onDismiss} title="Remove from recent books" type="button" /> : null}
-      <button aria-label={favorite ? "Remove from saved books" : "Save this book"} className={`favorite-chip ${favorite ? "favorite-chip-active" : ""}`} onClick={onToggleFavorite} type="button">
-        <span className="favorite-chip-label"><span className="favorite-chip-text favorite-chip-text-default">{favorite ? "Saved" : "Save"}</span>{favorite ? <span className="favorite-chip-text favorite-chip-text-hover">Remove</span> : null}</span>
+      <button aria-label={favorite ? `Unpin ${item.media.metadata.title}` : `Pin ${item.media.metadata.title}`} aria-pressed={favorite} className={`favorite-chip ${favorite ? "favorite-chip-active" : ""}`} onClick={onToggleFavorite} type="button">
+        <span className="favorite-chip-label"><span className="favorite-chip-text favorite-chip-text-default">{favorite ? "Pinned" : "Pin"}</span>{favorite ? <span className="favorite-chip-text favorite-chip-text-hover">Unpin</span> : null}</span>
       </button>
     </article>
   );

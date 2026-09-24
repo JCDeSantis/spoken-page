@@ -6,6 +6,7 @@ import { BookDetails } from "@/components/library/book-details";
 import { BookTile } from "@/components/library/book-tile";
 import {
   getSeriesNext,
+  formatDuration,
   libraryItemsById,
   BookProgressStatus,
   BookStatusOverrides,
@@ -269,6 +270,9 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   const [libraryFilterState, setLibraryFilterState] = useState<"idle" | "loading" | "error">("idle");
   const [libraryFilterError, setLibraryFilterError] = useState<string | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
+  const [showAllPins, setShowAllPins] = useState(false);
+  const [completingItemId, setCompletingItemId] = useState("");
+  const [continueError, setContinueError] = useState<string | null>(null);
   const [playedRecentIds, setPlayedRecentIds] = useState<string[]>([]);
   const [hiddenRecentIds, setHiddenRecentIds] = useState<string[]>([]);
   const [isBookDetailsOpen, setIsBookDetailsOpen] = useState(false);
@@ -412,6 +416,8 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     }
 
     setSelectedItem(payload);
+    setItems((current) => current.map((entry) => entry.id === itemId ? payload : entry));
+    setShelfItemsById((current) => current[itemId] ? { ...current, [itemId]: payload } : current);
     setItemState("idle");
     return payload;
   }
@@ -484,11 +490,21 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
 
   function handleResume() {
     if (!selectedItemId) return;
+    resumeBook(selectedItemId);
+  }
+
+  function resumeBook(itemId: string) {
     closeBookDetails(false);
+    if (itemId !== selectedItemId) {
+      setSelectedItemId(itemId);
+      setSelectedItem(null);
+      setItemState("loading");
+      setItemError(null);
+    }
     setPlayerOpenToken((current) => current + 1);
     setIsPlayerOpen(true);
-    setHiddenRecentIds((current) => current.filter((entry) => entry !== selectedItemId));
-    rememberRecent(selectedItemId);
+    setHiddenRecentIds((current) => current.filter((entry) => entry !== itemId));
+    rememberRecent(itemId);
   }
 
   function closeBookDetails(restoreFocus = true) {
@@ -507,13 +523,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     );
   }
 
-  function dismissRecent(itemId: string) {
-    setPlayedRecentIds((current) => current.filter((entry) => entry !== itemId));
-    setHiddenRecentIds((current) =>
-      current.includes(itemId) ? current : [itemId, ...current],
-    );
-  }
-
   function setBookStatus(itemId: string, status: BookProgressStatus | null) {
     setStatusOverrides((current) => {
       if (status) return { ...current, [itemId]: status };
@@ -521,6 +530,49 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
       delete next[itemId];
       return next;
     });
+  }
+
+  async function markContinueComplete(item: LibraryItemMinified) {
+    if (completingItemId) return;
+    const duration = item.userMediaProgress?.duration || item.media.duration;
+    const finishedAt = Date.now();
+    setCompletingItemId(item.id);
+    setContinueError(null);
+
+    try {
+      const response = await fetch(`/api/me/progress/${encodeURIComponent(item.id)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          duration,
+          progress: 1,
+          currentTime: duration,
+          isFinished: true,
+          finishedAt,
+          startedAt: item.userMediaProgress?.startedAt,
+        }),
+      });
+      if (!response.ok) throw new Error("Could not mark this book complete. Please try again.");
+
+      const finishedProgress = {
+        ...item.userMediaProgress,
+        duration,
+        progress: 1,
+        currentTime: duration,
+        isFinished: true,
+        finishedAt,
+      };
+      setBookStatus(item.id, "finished");
+      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, userMediaProgress: finishedProgress } : entry));
+      setShelfItemsById((current) => current[item.id]
+        ? { ...current, [item.id]: { ...current[item.id], userMediaProgress: finishedProgress } }
+        : current);
+      setSelectedItem((current) => current?.id === item.id ? { ...current, userMediaProgress: finishedProgress } : current);
+    } catch (error) {
+      setContinueError(error instanceof Error ? error.message : "Could not mark this book complete.");
+    } finally {
+      setCompletingItemId("");
+    }
   }
 
   useEffect(() => {
@@ -770,10 +822,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     [activeLibraryId, items, shelfItemsById],
   );
 
-  const favoritesLoading = !preferencesHydrated || favoriteIds.some((id) => !itemsById.has(id) && !resolvedShelfIds.has(id));
-  const recentsLoading = !preferencesHydrated || playedRecentIds.some((id) =>
-    !hiddenRecentIds.includes(id) && !itemsById.has(id) && !resolvedShelfIds.has(id));
-
   const favoriteItems = useMemo(
     () =>
       favoriteIds
@@ -782,19 +830,23 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     [favoriteIds, itemsById],
   );
 
-  const recentItems = useMemo(() => {
-    const localRecentOrder = new Map(playedRecentIds.map((id, index) => [id, index]));
-    const hiddenRecentSet = new Set(hiddenRecentIds);
+  const continueItem = useMemo(() =>
+    [...itemsById.values()]
+      .filter((entry) => {
+        const progress = entry.userMediaProgress;
+        return progress && statusOverrides[entry.id] !== "finished" && !hiddenRecentIds.includes(entry.id) && progress.currentTime > 0 && !progress.isFinished &&
+          progress.currentTime < (progress.duration || entry.media.duration);
+      })
+      .sort((left, right) => (right.userMediaProgress?.lastUpdate ?? 0) - (left.userMediaProgress?.lastUpdate ?? 0))[0] ?? null,
+  [hiddenRecentIds, itemsById, statusOverrides]);
+  const continueDuration = continueItem?.userMediaProgress?.duration || continueItem?.media.duration || 0;
+  const continueCurrentTime = continueItem?.userMediaProgress?.currentTime ?? 0;
+  const continuePercent = continueDuration > 0 ? Math.round(Math.min(100, continueCurrentTime / continueDuration * 100)) : 0;
 
-    return playedRecentIds
-      .map((id) => itemsById.get(id))
-      .filter(
-        (entry): entry is LibraryItemMinified =>
-          entry !== undefined && !hiddenRecentSet.has(entry.id),
-      )
-      .sort((left, right) => (localRecentOrder.get(left.id) ?? 999) - (localRecentOrder.get(right.id) ?? 999))
-      .slice(0, 12);
-  }, [hiddenRecentIds, itemsById, playedRecentIds]);
+  const browseItems = useMemo(() => {
+    const pinnedIds = new Set(favoriteIds);
+    return filteredItems.filter((entry) => !pinnedIds.has(entry.id));
+  }, [favoriteIds, filteredItems]);
 
   const activeLibrary = libraries.find((library) => library.id === activeLibraryId) ?? null;
 
@@ -805,11 +857,11 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     [itemsById, queueIds],
   );
 
-  function renderBookTile(entry: LibraryItemMinified, section: "all" | "recent" | "favorites") {
+  function renderBookTile(entry: LibraryItemMinified, section: "all" | "pinned") {
     const isFavorite = favoriteIds.includes(entry.id);
     const isSelected = entry.id === selectedItemId;
 
-    return <BookTile key={`${section}-${entry.id}`} item={entry} compact={section !== "all"} favorite={isFavorite} selected={isSelected} status={statusOverrides[entry.id]} onSelect={() => handleBookSelect(entry.id)} onSelectSeries={() => showSeries(entry.media.metadata.seriesName)} onToggleFavorite={() => toggleFavorite(entry.id)} onDismiss={section === "recent" ? () => dismissRecent(entry.id) : undefined} />;
+    return <BookTile key={`${section}-${entry.id}`} item={entry} compact={section === "pinned"} favorite={isFavorite} selected={isSelected} status={statusOverrides[entry.id]} onSelect={() => handleBookSelect(entry.id)} onSelectSeries={() => showSeries(entry.media.metadata.seriesName)} onToggleFavorite={() => toggleFavorite(entry.id)} />;
   }
 
   function showSeries(seriesName: string | null | undefined) {
@@ -827,7 +879,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
       <section className="panel library-panel">
         <div className="library-overview">
           <div className="library-overview-copy">
-            <p className="eyebrow">Spoken Page Library</p>
             <div className="library-overview-main">
               <h2>{activeLibrary?.name ?? "Audiobookshelf Library"}</h2>
               <p className="panel-description library-overview-meta">
@@ -855,52 +906,57 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
           </div>
         </div>
 
-        <div className="library-sections">
-          <section className="library-section-card">
+        {continueItem ? (
+          <section className="continue-listening" aria-label="Continue listening">
+            <button className="continue-listening-book" onClick={() => handleBookSelect(continueItem.id)} type="button">
+              <img alt="" src={`/api/items/${continueItem.id}/cover`} />
+              <span className="continue-listening-copy">
+                <span className="eyebrow">Continue listening</span>
+                <strong>{continueItem.media.metadata.title}</strong>
+                <span className="continue-listening-author">{continueItem.media.metadata.authorName ?? "Unknown author"}</span>
+                <span className="continue-listening-time">{continuePercent}% complete · {formatDuration(Math.max(0, continueDuration - continueCurrentTime))} left</span>
+                <span className="continue-listening-progress" role="progressbar" aria-label="Listening progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={continuePercent}>
+                  <span style={{ width: `${continuePercent}%` }} />
+                </span>
+              </span>
+            </button>
+            <div className="continue-listening-actions">
+              <button className="button button-secondary" disabled={Boolean(completingItemId)} onClick={() => void markContinueComplete(continueItem)} type="button">{completingItemId ? "Saving…" : "Mark complete"}</button>
+              <button className="button button-primary continue-listening-resume" onClick={() => resumeBook(continueItem.id)} type="button">Resume</button>
+            </div>
+            {continueError ? <p className="continue-listening-error status-error" role="alert">{continueError}</p> : null}
+          </section>
+        ) : null}
+
+        {continueItem && favoriteItems.length > 0 ? <div className="continue-pinned-divider" aria-hidden="true" /> : null}
+
+        {favoriteItems.length > 0 ? (
+          <section className="pinned-section" aria-label="Pinned books">
             <div className="library-section-head">
-              <div>
-                <h3>Favorites</h3>
-              </div>
+              <div><h3>Pinned books</h3></div>
               <span className="section-count">{favoriteItems.length}</span>
             </div>
-
             {favoriteItems.length > 0 ? (
-              <div className="book-tile-grid book-tile-grid-featured">
-                {favoriteItems.slice(0, 8).map((entry) => renderBookTile(entry, "favorites"))}
-              </div>
-            ) : (
-              <p className="status-message">
-                {favoritesLoading ? "Finding saved books…" : "Save books here so the ones you revisit often stay pinned to the top."}
-              </p>
-            )}
+              <>
+                <div className="pinned-book-grid">
+                  {(showAllPins ? favoriteItems : favoriteItems.slice(0, 4)).map((entry) => renderBookTile(entry, "pinned"))}
+                </div>
+                {favoriteItems.length > 4 ? (
+                  <button className="button button-secondary pinned-show-more" onClick={() => setShowAllPins((current) => !current)} type="button">
+                    {showAllPins ? "Show fewer" : `Show all ${favoriteItems.length} pins`}
+                  </button>
+                ) : null}
+              </>
+            ) : null}
           </section>
-
-          <section className="library-section-card">
-            <div className="library-section-head">
-              <div>
-                <h3>Recent Books</h3>
-              </div>
-              <span className="section-count">{recentItems.length}</span>
-            </div>
-
-            {recentItems.length > 0 ? (
-              <div className="book-tile-grid book-tile-grid-featured">
-                {recentItems.map((entry) => renderBookTile(entry, "recent"))}
-              </div>
-            ) : (
-              <p className="status-message">
-                {recentsLoading ? "Finding recent books…" : "Recently opened or in-progress books will appear here for quicker return trips."}
-              </p>
-            )}
-          </section>
-        </div>
+        ) : null}
 
         <section className="library-section-card library-section-main" id="book-library">
           <div className="library-section-head">
             <div>
-              <h3>Book Library</h3>
+              <h3>Browse books</h3>
             </div>
-            <span className="section-count">{filteredItems.length}</span>
+            <span className="section-count">{browseItems.length}</span>
           </div>
 
           <div className="all-books-searchbar">
@@ -1117,7 +1173,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
           {itemsError ? <p className="status-message status-error">{itemsError}</p> : null}
 
           <div className="book-tile-grid">
-            {filteredItems.map((entry) => renderBookTile(entry, "all"))}
+            {browseItems.map((entry) => renderBookTile(entry, "all"))}
           </div>
 
           {itemsPage && itemsPage.total > items.length ? (
@@ -1129,8 +1185,8 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
             </div>
           ) : null}
 
-          {itemsState === "idle" && filteredItems.length === 0 ? (
-            <p className="status-message">No audiobooks matched that filter.</p>
+          {itemsState === "idle" && browseItems.length === 0 ? (
+            <p className="status-message">{filteredItems.length > 0 ? "All matching books are pinned above." : "No audiobooks matched that filter."}</p>
           ) : null}
         </section>
 
