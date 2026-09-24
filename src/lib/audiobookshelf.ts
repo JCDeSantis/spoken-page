@@ -310,7 +310,9 @@ export async function absFetch(path: string, init: FetchInit = {}) {
     const timedOut = timeoutSignal.aborted && !init.signal?.aborted;
     throw new AudiobookshelfError(timedOut ? "Audiobookshelf did not respond in time." : "Could not reach Audiobookshelf.", timedOut ? "timeout" : "connection");
   } finally {
-    console.info(JSON.stringify({ level: "info", event: "abs_request", method: init.method ?? "GET", path: new URL(url).pathname, durationMs: Date.now() - startedAt }));
+    if (process.env.SPOKEN_PAGE_VERBOSE_REQUEST_LOGS === "true") {
+      console.info(JSON.stringify({ level: "info", event: "abs_request", method: init.method ?? "GET", path: new URL(url).pathname, durationMs: Date.now() - startedAt }));
+    }
   }
 
   if (response.status === 401 && !init.skipAuthRefresh) {

@@ -1,6 +1,6 @@
 # Spoken Page
 
-![Version](https://img.shields.io/badge/version-v1.2.0-ff5664?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-v1.2.1-ff5664?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-163434?style=for-the-badge)
 
 ![Spoken Page logo](public/spoken-page-logo-trimmed.png)
@@ -115,6 +115,7 @@ The development server defaults to `http://localhost:3000`.
 | `SPOKEN_PAGE_ALLOWED_BASE_URLS` | No | Allows additional exact Audiobookshelf base URLs |
 | `SPOKEN_PAGE_ALLOW_UNSAFE_CUSTOM_CONNECTIONS` | No | Allows arbitrary user-entered server URLs; defaults to `false` |
 | `SPOKEN_PAGE_DATA_DIR` | No | Persistent storage location; Compose uses `/app/data` |
+| `SPOKEN_PAGE_VERBOSE_REQUEST_LOGS` | No | Log every API and Audiobookshelf request for troubleshooting; defaults to `false` |
 
 Use HTTPS for public deployments and for reliable screen-wake behavior on iPad. Safari currently provides the strongest iPad PWA/fullscreen behavior.
 

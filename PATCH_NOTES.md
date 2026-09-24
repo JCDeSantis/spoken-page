@@ -1,5 +1,11 @@
 # Spoken Page patch notes
 
+## v1.2.1 — September 24, 2026
+
+- Updated Next.js, vulnerable transitive dependencies, and the test runner; refreshed Alpine packages and removed unused npm tooling from the runtime image.
+- Kept request-level diagnostics available through `SPOKEN_PAGE_VERBOSE_REQUEST_LOGS=true` while leaving routine request logging off by default. Errors continue to be logged.
+- Added Docker Compose log rotation to limit retained container output.
+
 ## v1.2.0 — September 24, 2026
 
 - Refreshed the library with a responsive cover gallery, a black canvas, dark red surfaces, and the existing Spoken Page red for accents and section counts.

@@ -52,7 +52,7 @@ export function errorResponse(error: unknown, fallback: string, request?: Reques
   } else if (error instanceof Error) {
     message = error.message;
   }
-  console.error(JSON.stringify({ level: "error", event: "api_error", requestId, status, message, errorType: error instanceof Error ? error.name : typeof error }));
+  console.error(JSON.stringify({ level: "error", event: "api_error", requestId, path: request ? new URL(request.url).pathname : undefined, status, message, errorType: error instanceof Error ? error.name : typeof error }));
   return NextResponse.json({ error: message, requestId }, { status, headers: { "x-request-id": requestId, "cache-control": "no-store" } });
 }
 
