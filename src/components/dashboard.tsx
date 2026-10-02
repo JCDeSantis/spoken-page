@@ -6,12 +6,13 @@ import { migrateLibraryPreferences, type LibraryPreferences } from "@/lib/librar
 import { listeningState, type ProgressAction } from "@/lib/listening-status";
 import { changeListeningProgress, PROGRESS_EVENT } from "@/lib/progress-client";
 import { parseLibraryQuery } from "@/lib/library-query";
+import { hasBrowseQuery, restoreBrowsePreferences } from "@/lib/browse-preferences";
+import { bookSeries } from "@/lib/series";
 import type { MediaProgress } from "@/lib/types";
 import { PlayerPanel } from "@/components/player-panel";
 import { BookDetails } from "@/components/library/book-details";
 import { BookTile } from "@/components/library/book-tile";
 import {
-  getSeriesNext,
   formatDuration,
   libraryItemsById,
   BookProgressStatus,
@@ -158,8 +159,8 @@ function normalizeSeriesOptions(entries: LibraryFilterData["series"]) {
   const deduped = new Map<string, LibraryFilterData["series"][number]>();
 
   for (const entry of entries) {
-    const canonicalName = stripSeriesSuffix(entry.name);
-    const canonicalId = getSeriesFilterKey(entry.name) || normalizeValue(entry.id) || normalizeValue(entry.name);
+    const canonicalName = entry.name.trim();
+    const canonicalId = normalizeValue(canonicalName) || normalizeValue(entry.id);
 
     if (!canonicalName || !canonicalId || deduped.has(canonicalId)) {
       continue;
@@ -191,10 +192,9 @@ function deriveFilterData(items: LibraryItemMinified[]) {
       narrators.set(normalizeValue(narrator), narrator);
     }
 
-    const seriesName = entry.media.metadata.seriesName?.trim();
-    if (seriesName) {
-      const canonicalSeriesName = stripSeriesSuffix(seriesName);
-      const canonicalSeriesKey = getSeriesFilterKey(seriesName);
+    for (const membership of bookSeries(entry.media.metadata)) {
+      const canonicalSeriesName = membership.name;
+      const canonicalSeriesKey = normalizeValue(canonicalSeriesName);
 
       if (canonicalSeriesName && canonicalSeriesKey) {
         series.set(canonicalSeriesKey, canonicalSeriesName);
@@ -290,6 +290,9 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   const [wantFilter, setWantFilter] = useState(false);
   const [hideCompleted, setHideCompleted] = useState(false);
   const [urlReady, setUrlReady] = useState(false);
+  const browseSaveQueueRef = useRef(Promise.resolve());
+  const browseWritableRef = useRef(false);
+  const [browseSaveError, setBrowseSaveError] = useState<string | null>(null);
   const [direction, setDirection] = useState("asc");
   const preferenceScope = profile.preferenceScope ?? profile.userId;
   const queryParams = new URLSearchParams({ q: filter, sort, direction, status: progressFilter === "planned" ? "all" : progressFilter, want: String(wantFilter), hideCompleted: String(hideCompleted), ...browseFilters });
@@ -308,6 +311,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   const libraryPreferencesDirtyRef = useRef(false);
   const preferencesWritableRef = useRef(false);
   const bookDetailsTriggerRef = useRef<HTMLElement | null>(null);
+  const itemLoadGenerationRef = useRef(0);
 
   libraryPreferencesRef.current = { ...planning, favoriteIds, playedRecentIds, hiddenRecentIds, queueIds };
 
@@ -350,22 +354,32 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
 
     setItemState("loading");
     setItemError(null);
+    const generation = ++itemLoadGenerationRef.current;
+    try {
+      const response = await fetch(`/api/items/${itemId}`);
+      const payload = (await response.json()) as LibraryItemExpanded | { error?: string };
+      if (generation !== itemLoadGenerationRef.current) return "media" in payload ? payload : null;
 
-    const response = await fetch(`/api/items/${itemId}`);
-    const payload = (await response.json()) as LibraryItemExpanded | { error?: string };
+      if (!response.ok || !("media" in payload)) {
+        setItemState("error");
+        setItemError("error" in payload ? payload.error ?? "Unable to load the book." : "Unable to load the book.");
+        setSelectedItem(null);
+        return null;
+      }
 
-    if (!response.ok || !("media" in payload)) {
-      setItemState("error");
-      setItemError("error" in payload ? payload.error ?? "Unable to load the book." : "Unable to load the book.");
-      setSelectedItem(null);
+      setSelectedItem(payload);
+      setItems((current) => current.map((entry) => entry.id === itemId ? payload : entry));
+      setShelfItemsById((current) => current[itemId] ? { ...current, [itemId]: payload } : current);
+      setItemState("idle");
+      return payload;
+    } catch {
+      if (generation === itemLoadGenerationRef.current) {
+        setItemState("error");
+        setItemError("The book could not be loaded. Close and reopen its details to retry.");
+        setSelectedItem(null);
+      }
       return null;
     }
-
-    setSelectedItem(payload);
-    setItems((current) => current.map((entry) => entry.id === itemId ? payload : entry));
-    setShelfItemsById((current) => current[itemId] ? { ...current, [itemId]: payload } : current);
-    setItemState("idle");
-    return payload;
   }
 
   async function loadFilterData(libraryId: string) {
@@ -614,7 +628,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
 
   useEffect(() => {
     void loadFilterData(activeLibraryId);
-    setBrowseFilters({ ...EMPTY_BROWSE_FILTERS });
   }, [activeLibraryId]);
 
   useEffect(() => {
@@ -687,9 +700,10 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   }, []);
 
   useEffect(() => {
-    const restore = () => {
+    let cancelled = false;
+    const apply = (params: URLSearchParams) => {
       try {
-        const params = new URLSearchParams(window.location.search); const query = parseLibraryQuery(params);
+        const query = parseLibraryQuery(params);
         setFilter(query.q); setSort(query.sort); setDirection(query.direction); setProgressFilter(query.status); setWantFilter(query.want);
         setHideCompleted(query.hideCompleted);
         setBrowseFilters({ genre: query.genre, tag: query.tag, author: query.author, narrator: query.narrator, series: query.series, language: query.language });
@@ -697,8 +711,29 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
       } catch { /* Invalid URL query falls back to the visible controls. */ }
       setUrlReady(true);
     };
-    restore(); window.addEventListener("popstate", restore);
-    return () => window.removeEventListener("popstate", restore);
+    const restore = () => apply(new URLSearchParams(window.location.search));
+    const initial = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const key = userStorageKey("spoken-page-browse-v1", preferenceScope);
+      let local: unknown = null;
+      try { local = JSON.parse(window.localStorage.getItem(key) ?? "null"); } catch { /* Storage may be unavailable. */ }
+      let saved = restoreBrowsePreferences(local, libraries.map(library => library.id));
+      try {
+        const response = await fetch("/api/preferences/browse");
+        if (!response.ok) throw new Error("Unable to load library view.");
+        const payload = await response.json();
+        saved = restoreBrowsePreferences(payload.value, libraries.map(library => library.id)) ?? saved;
+        browseWritableRef.current = true;
+      } catch { /* Preserve the browser copy; do not overwrite unavailable server settings. */ }
+      if (cancelled) return;
+      if (!hasBrowseQuery(params) && saved) {
+        const restored = new URLSearchParams(Object.entries(saved.query).map(([key, value]) => [key, String(value)]));
+        if (saved.libraryId) restored.set("library", saved.libraryId);
+        apply(restored);
+      } else apply(params);
+    };
+    void initial(); window.addEventListener("popstate", restore);
+    return () => { cancelled = true; window.removeEventListener("popstate", restore); };
   }, []);
   useEffect(() => {
     if (!urlReady) return;
@@ -706,6 +741,15 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
       const params = new URLSearchParams(queryString); params.set("library", activeLibraryId);
       const next = "?" + params.toString();
       if (next !== window.location.search) window.history.pushState(null, "", next);
+      const value = { schemaVersion: 1, query: queryString, libraryId: activeLibraryId };
+      try { window.localStorage.setItem(userStorageKey("spoken-page-browse-v1", preferenceScope), JSON.stringify(value)); } catch { /* Server storage is still available. */ }
+      if (browseWritableRef.current) browseSaveQueueRef.current = browseSaveQueueRef.current.then(async () => {
+        try {
+          const response = await fetch("/api/preferences/browse", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ value }) });
+          if (!response.ok) throw new Error("Unable to save library view.");
+          setBrowseSaveError(null);
+        } catch { setBrowseSaveError("Your library view could not be synced to your account. It will retry the next time you change the view."); }
+      });
     }, 350);
     return () => window.clearTimeout(timeout);
   }, [queryString, activeLibraryId, urlReady]);
@@ -771,8 +815,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
 
   const activeLibrary = libraries.find((library) => library.id === activeLibraryId) ?? null;
 
-  const selectedMinified = itemsById.get(selectedItemId) ?? null;
-  const nextInSeries = useMemo(() => getSeriesNext(items, selectedMinified), [items, selectedMinified]);
+  const nextInSeries = selectedItem?.id === selectedItemId ? selectedItem.nextInSeries ?? null : null;
   const queueItems = useMemo(
     () => queueIds.map((id) => itemsById.get(id)).filter((entry): entry is LibraryItemMinified => Boolean(entry)),
     [itemsById, queueIds],
@@ -782,11 +825,11 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     const isFavorite = favoriteIds.includes(entry.id);
     const isSelected = entry.id === selectedItemId && (isBookDetailsOpen || isPlayerOpen);
 
-    return <BookTile key={`${section}-${entry.id}`} item={entry} compact={section === "pinned"} favorite={isFavorite} selected={isSelected} wantToListen={planning.wantToListenIds.includes(entry.id)} onSelect={() => handleBookSelect(entry.id)} onSelectSeries={() => showSeries(entry.media.metadata.seriesName)} onToggleFavorite={() => toggleFavorite(entry.id)} />;
+    return <BookTile key={`${section}-${entry.id}`} item={entry} compact={section === "pinned"} favorite={isFavorite} selected={isSelected} wantToListen={planning.wantToListenIds.includes(entry.id)} onSelect={() => handleBookSelect(entry.id)} onSelectSeries={showSeries} onToggleFavorite={() => toggleFavorite(entry.id)} />;
   }
 
   function showSeries(seriesName: string | null | undefined) {
-    const name = stripSeriesSuffix(seriesName);
+    const name = seriesName?.trim() ?? "";
     if (!name) return;
     setFilter("");
     setProgressFilter("all");
@@ -875,6 +918,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
         ) : null}
 
         <section className="library-section-card library-section-main" id="book-library">
+          {browseSaveError ? <p className="status-message" role="status">{browseSaveError}</p> : null}
           <div className="library-section-head">
             <div>
               <h3>Browse books</h3>
@@ -1150,7 +1194,8 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
                 handleBookSelect(id);
               }}
               onResume={handleResume}
-              onSelectSeries={() => showSeries(selectedItem?.media.metadata.seriesName)}
+              onSelectSeries={showSeries}
+              onSelectNext={handleBookSelect}
               wantToListen={Boolean(selectedItem && planning.wantToListenIds.includes(selectedItem.id))}
               onToggleWant={() => { if (selectedItem) toggleWant(selectedItem.id); }}
               onProgressAction={(action) => { if (selectedItem) void applyProgressAction(selectedItem, action); }}

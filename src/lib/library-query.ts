@@ -1,6 +1,6 @@
 import type { LibraryItemMinified } from "./types";
 import { listeningState } from "./listening-status";
-import { seriesDisplay, stripSeriesSuffix } from "@/components/library/library-utils";
+import { bookSeries, compareSeries, seriesKey } from "./series";
 
 export const QUERY_FILTERS = ["genre", "tag", "author", "narrator", "series", "language"] as const;
 export const QUERY_SORTS = ["title", "recent", "progress", "author", "series", "year", "duration"] as const;
@@ -36,11 +36,11 @@ export function queryLibrary(items: LibraryItemMinified[], query: LibraryQuery, 
   const wanted = new Set(wantedIds); const needle = normalize(query.q);
   const matches = items.filter(item => {
     const m = item.media.metadata;
-    return (!needle || [m.title, m.subtitle, m.authorName, m.narratorName, m.seriesName].some(s => normalize(s).includes(needle)))
+    return (!needle || [m.title, m.subtitle, m.authorName, m.narratorName, ...bookSeries(m).map(series => series.name)].some(s => normalize(s).includes(needle)))
       && (!query.genre || m.genres?.some(g => normalize(g) === normalize(query.genre)))
       && (!query.tag || item.media.tags?.some(t => normalize(t) === normalize(query.tag)))
       && namesMatch(m.authorName, query.author) && namesMatch(m.narratorName, query.narrator)
-      && (!query.series || normalize(stripSeriesSuffix(m.seriesName)) === normalize(stripSeriesSuffix(query.series)))
+      && (!query.series || bookSeries(m).some(series => seriesKey(series.name) === seriesKey(query.series)))
       && (!query.language || normalize(m.language) === normalize(query.language))
       && (query.status === "all" || listeningState(item.userMediaProgress) === query.status)
       && (!query.hideCompleted || listeningState(item.userMediaProgress) !== "finished")
@@ -50,7 +50,7 @@ export function queryLibrary(items: LibraryItemMinified[], query: LibraryQuery, 
     switch (query.sort) {
       case "title": return item.media.metadata.title;
       case "author": return item.media.metadata.authorName ?? "";
-      case "series": return stripSeriesSuffix(item.media.metadata.seriesName);
+      case "series": return bookSeries(item.media.metadata)[0]?.name ?? "";
       case "year": return Number(item.media.metadata.publishedYear) || 0;
       case "duration": return item.media.duration;
       case "recent": return item.userMediaProgress?.lastUpdate ?? 0;
@@ -59,12 +59,7 @@ export function queryLibrary(items: LibraryItemMinified[], query: LibraryQuery, 
   };
   matches.sort((a,b) => {
     if (query.sort === "series") {
-      const left = seriesDisplay(a.media.metadata.seriesName), right = seriesDisplay(b.media.metadata.seriesName);
-      // Keep standalone books at the end, and order a series by its book number.
-      if (Boolean(left.name) !== Boolean(right.name)) return left.name ? -1 : 1;
-      const nameOrder = compare(left.name, right.name);
-      const positionOrder = left.number === right.number ? 0 : left.number === null ? 1 : right.number === null ? -1 : Number(left.number) - Number(right.number);
-      return (nameOrder || positionOrder) * (query.direction === "desc" ? -1 : 1) || compare(a.media.metadata.title,b.media.metadata.title) || a.id.localeCompare(b.id);
+      return compareSeries(a.media.metadata, b.media.metadata, query.direction, query.series) || compare(a.media.metadata.title,b.media.metadata.title) || a.id.localeCompare(b.id);
     }
     const x = score(a), y = score(b);
     const primary = typeof x === "number" && typeof y === "number" ? x-y : compare(String(x),String(y));

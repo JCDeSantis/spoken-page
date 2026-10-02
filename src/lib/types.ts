@@ -11,6 +11,7 @@ export type LibraryItemMetadata = {
   authorName?: string | null;
   narratorName?: string | null;
   seriesName?: string | null;
+  series?: { id?: string; name: string; sequence?: string | number | null }[];
   description?: string | null;
   publishedYear?: string | null;
   genres?: string[];
@@ -96,6 +97,8 @@ export type LibraryItemMinified = {
 };
 
 export type LibraryItemExpanded = LibraryItemMinified & {
+  nextInSeries?: LibraryItemMinified | null;
+  nextInSeriesError?: string | null;
   libraryFiles?: LibraryFile[];
   media: LibraryItemMinified["media"] & {
     tracks?: AudioTrack[];

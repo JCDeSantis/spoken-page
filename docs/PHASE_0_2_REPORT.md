@@ -39,7 +39,7 @@ The isolated UI screenshot is [phase-0-2-review.png](phase-0-2-review.png).
 
 For repeatable isolated checks: `node scripts/dev-fixture.cjs` opens port 4320 (fixture/fixture). The local fixture server uses port 4319. For the read-only capability probe after signing in: `node scripts/check-abs-capabilities.cjs https://audiobook.bananapizza.org`. The probe uses the existing session client and saves only capability metadata.
 
-Stop here until the user confirms Phases 0–2. Next authorized work must be agreed after this review; offline behavior and mini/full-screen player visuals remain future work in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
+The user subsequently skipped offline phases and player redesign, and authorized library preferences, series handling and clearer progress-save feedback. The combined improvements are included in v1.3.0; see [the upgrades review](LIBRARY_UPGRADES_REVIEW.md). The original [development plan](DEVELOPMENT_PLAN.md) remains historical reference.
 
 ## UI review adjustments
 

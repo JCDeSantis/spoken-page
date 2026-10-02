@@ -1,15 +1,15 @@
 # Spoken Page
 
-![Version](https://img.shields.io/badge/version-v1.2.1-ff5664?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-v1.3.0-ff5664?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-163434?style=for-the-badge)
 
 ![Spoken Page logo](public/spoken-page-logo-trimmed.png)
 
 Spoken Page is a responsive, subtitle-first web player for [Audiobookshelf](https://github.com/advplyr/audiobookshelf). It keeps Audiobookshelf as the source of truth while adding a focused library and listening experience for desktop, tablet, and installable PWA use.
 
-## What v1.2 adds
+## What v1.3 adds
 
-The current development workspace also includes Phases 0–2 for review: complete-library search and Audiobookshelf-derived listening status with a separate Want to listen preference. See [the review report](docs/PHASE_0_2_REPORT.md) for validation, limitations and review steps. Offline downloads and player visuals remain planned work.
+Version 1.3 includes complete-library search, Audiobookshelf-derived listening status with a separate Want to listen preference, remembered library views, improved series handling and clearer progress-save feedback. See [the library upgrades review](docs/LIBRARY_UPGRADES_REVIEW.md) and [initial validation report](docs/PHASE_0_2_REPORT.md). Offline downloads and player redesign are excluded from this release.
 
 - A responsive cover gallery with a black and dark red theme
 - Compact Pinned books that sync with your account and carry forward existing saved books
@@ -30,8 +30,13 @@ See [PATCH_NOTES.md](PATCH_NOTES.md) for the complete release notes, including e
 - See Not started, In progress or Completed from Audiobookshelf; save Want to listen independently
 - Expand long synopses directly in the book details modal
 - Queue the next book in a series
+- Remember the selected library, search, sort direction, listening status and filters for your account; explicit search links override the saved view
+- Handle multiple series memberships and numeric book positions, including decimal sequences
+- Preview the next available book in a series with its cover and open its details directly, independently of shelf filters
 
 ### Player
+
+- Show saving, saved and failed progress states; retry temporary failures while the player remains open, including when paused. Failed saves are not retained after closing the page.
 
 - Start and resume native Audiobookshelf playback sessions
 - Keep progress synchronized with Audiobookshelf across multi-track books

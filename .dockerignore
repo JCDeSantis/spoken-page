@@ -1,5 +1,11 @@
 node_modules
 .next
+.next-*/
+.test-data/
+data/
+certificates/
+docs/*.png
+*.tsbuildinfo
 .env
 .env.local
 .git

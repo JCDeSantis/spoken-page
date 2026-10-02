@@ -1,3 +1,4 @@
+import { parseSeriesLabel, compareSeries, nextSeriesBook } from "@/lib/series";
 import { LibraryItemMinified } from "@/lib/types";
 
 export type LibrarySort = "title" | "recent" | "progress" | "author" | "series" | "year" | "duration";
@@ -31,44 +32,10 @@ export function normalized(value: string | null | undefined) {
   return (value ?? "").trim().toLocaleLowerCase();
 }
 
-export function stripSeriesSuffix(value: string | null | undefined) {
-  const collapsed = (value ?? "").trim().replace(/\s+/g, " ");
-  if (!collapsed) return "";
-
-  const labeled = collapsed
-    .replace(/(?:\s*[-,:]\s*)?(?:book|bk|volume|vol(?:ume)?|part)\s*\d+(?:\.\d+)?$/i, "")
-    .replace(/(?:\s*[-,:]\s*)?#\s*\d+(?:\.\d+)?$/i, "")
-    .trim();
-  if (labeled !== collapsed) return labeled;
-
-  const separated = collapsed.match(/^(.*\S)\s*[-:]\s*\d+(?:\.\d+)?$/);
-  if (separated && separated[1].trim().split(/\s+/).length > 1) return separated[1].trim();
-
-  const bare = collapsed.match(/^(.*\S)\s+\d+(?:\.\d+)?$/);
-  if (bare && bare[1].trim().split(/\s+/).length > 1) return bare[1].trim();
-
-  return collapsed;
-}
-
-export function seriesDisplay(value: string | null | undefined) {
-  const name = stripSeriesSuffix(value);
-  const full = (value ?? "").trim().replace(/\s+/g, " ");
-  const suffix = full.slice(name.length);
-  const number = name !== full ? suffix.match(/(\d+(?:\.\d+)?)\s*$/)?.[1] : undefined;
-  return { name, number: number ?? null };
-}
-
-export function seriesIdentity(value: string | null | undefined) {
-  return normalized(value)
-    .replace(/(?:\s*[-,:]\s*)?(?:book|bk|volume|vol(?:ume)?|part)\s*\d+(?:\.\d+)?$/i, "")
-    .replace(/(?:\s*[-,:]\s*)?#\s*\d+(?:\.\d+)?$/i, "")
-    .trim();
-}
-
-export function seriesPosition(value: string | null | undefined) {
-  const match = (value ?? "").match(/(?:book|bk|volume|vol(?:ume)?|part|#)\s*(\d+(?:\.\d+)?)\s*$/i);
-  return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
-}
+export function stripSeriesSuffix(value: string | null | undefined) { return parseSeriesLabel(value).name; }
+export function seriesDisplay(value: string | null | undefined) { return parseSeriesLabel(value); }
+export function seriesIdentity(value: string | null | undefined) { return normalized(parseSeriesLabel(value).name); }
+export function seriesPosition(value: string | null | undefined) { const n = parseSeriesLabel(value).number; return n === null ? Number.POSITIVE_INFINITY : Number(n); }
 
 export function selectedBookStatus(status?: BookProgressStatus): BookProgressStatus | null {
   return status ?? null;
@@ -87,8 +54,7 @@ export function sortLibraryItems(items: LibraryItemMinified[], sort: LibrarySort
         return normalized(leftMetadata.authorName).localeCompare(normalized(rightMetadata.authorName)) ||
           normalized(leftMetadata.title).localeCompare(normalized(rightMetadata.title));
       case "series":
-        return normalized(leftMetadata.seriesName).localeCompare(normalized(rightMetadata.seriesName), undefined, { numeric: true }) ||
-          normalized(leftMetadata.title).localeCompare(normalized(rightMetadata.title));
+        return compareSeries(leftMetadata, rightMetadata) || normalized(leftMetadata.title).localeCompare(normalized(rightMetadata.title));
       case "year":
         return Number(rightMetadata.publishedYear ?? 0) - Number(leftMetadata.publishedYear ?? 0) ||
           normalized(leftMetadata.title).localeCompare(normalized(rightMetadata.title));
@@ -104,16 +70,7 @@ function progressSortValue(item: LibraryItemMinified, _selectedStatus?: BookProg
   return item.userMediaProgress?.isFinished ? 1 : item.userMediaProgress?.progress ?? 0;
 }
 
-export function getSeriesNext(items: LibraryItemMinified[], current: LibraryItemMinified | null) {
-  const identity = seriesIdentity(current?.media.metadata.seriesName);
-  if (!identity || !current) return null;
-  const ordered = items
-    .filter((item) => seriesIdentity(item.media.metadata.seriesName) === identity)
-    .sort((a, b) => seriesPosition(a.media.metadata.seriesName) - seriesPosition(b.media.metadata.seriesName) ||
-      normalized(a.media.metadata.title).localeCompare(normalized(b.media.metadata.title)));
-  const currentIndex = ordered.findIndex((item) => item.id === current.id);
-  return currentIndex >= 0 ? ordered[currentIndex + 1] ?? null : null;
-}
+export const getSeriesNext = nextSeriesBook;
 
 export function formatDuration(seconds: number) {
   if (!Number.isFinite(seconds) || seconds <= 0) return "Unknown length";

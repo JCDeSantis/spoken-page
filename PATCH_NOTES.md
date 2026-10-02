@@ -1,6 +1,13 @@
 # Spoken Page patch notes
 
-## Unreleased — Phases 0–2 review
+## v1.3.0 — October 1, 2026
+
+- Restore account-scoped library selection, search, sorting, listening status and filters on a fresh visit. Explicit URL options take precedence; browser history remains usable.
+- Display separate links for multiple series memberships and sort numeric series positions correctly, including decimal positions.
+- Add a compact next-book preview to book details with cover art and direct navigation. Resolve the next available numeric sequence from the entire authorized library, independent of current shelf filters.
+- Show progress-save failures even without subtitles, offer Retry now and retry temporary failures with increasing delays while the player remains open. Authentication failures ask the listener to sign in again. No offline storage or player redesign is included.
+- Keep Start over beside the listening-status actions for both completed and in-progress books.
+- Refine library controls, square cover frames, pin icons and filter layout; include Hide completed and Series sorting.
 
 - Search the complete authorized library before filtering, sorting and pagination; show matching totals, preparation and refresh controls.
 - Derive listening status from Audiobookshelf and keep Want to listen separate. Add completion, unfinished and confirmed reset controls with shared updates across library surfaces.

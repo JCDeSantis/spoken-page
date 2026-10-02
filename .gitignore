@@ -17,6 +17,7 @@ certificates
 .test-data/
 .next-review/
 .next-build-check/
+.next-fixture-next/
 
 # Local UI review captures; retain the isolated fixture illustration.
 docs/*.png

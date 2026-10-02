@@ -10,6 +10,7 @@ import {
   SubtitleCue,
 } from "@/lib/types";
 import { playbackFinished } from "@/lib/listening-status";
+import { progressSaveFailure, progressRetryDelay } from "@/lib/progress-save-feedback";
 import { publishProgress } from "@/lib/progress-client";
 import { parseSubtitle } from "@/lib/srt";
 import { formatSleepTimer, useSleepTimer, type SleepTimerSelection } from "@/components/use-sleep-timer";
@@ -438,6 +439,8 @@ export function PlayerPanel({
   const trackRequestIdRef = useRef(0);
   const checkpointSequenceRef = useRef(0);
   const checkpointQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const failedCheckpointRef = useRef<{ itemId: string; sessionId: string; mode: "sync" | "close" } | null>(null);
+  const saveFailuresRef = useRef(0);
   const lastSyncedTimeRef = useRef(0);
   const lastAutoRefreshTokenRef = useRef(0);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
@@ -457,6 +460,7 @@ export function PlayerPanel({
   const [busyAction, setBusyAction] = useState<"starting" | "syncing" | "refreshing" | null>(null);
   const [playerStatus, setPlayerStatus] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
+  const [progressSaveNotice, setProgressSaveNotice] = useState<{ state: "saving" | "saved" | "failed"; message: string; retryable: boolean } | null>(null);
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
   const [subtitleSourceLabel, setSubtitleSourceLabel] = useState("No subtitle file loaded");
   const [subtitleStatus, setSubtitleStatus] = useState<string | null>(null);
@@ -1094,12 +1098,17 @@ export function PlayerPanel({
         return false;
       }
 
+      const capturedTime = currentTimeRef.current;
+      const capturedListeningSeconds = snapshotListeningSeconds();
+      const capturedCompletion = completionReachedRef.current;
+
       const previousCheckpoint = checkpointQueueRef.current;
       let releaseCheckpoint: () => void = () => {};
       checkpointQueueRef.current = new Promise<void>((resolve) => {
         releaseCheckpoint = resolve;
       });
       await previousCheckpoint;
+      const isCurrent = () => targetItem.id === itemRef.current?.id && targetSession.id === sessionRef.current?.id;
 
       const duration = Math.max(
         resolveTimelineDuration(
@@ -1109,9 +1118,9 @@ export function PlayerPanel({
         1,
       );
       const now = Date.now();
-      const nextTime = clampTime(currentTimeRef.current, duration);
-      const timeListened = snapshotListeningSeconds();
-      const isFinished = playbackFinished(nextTime, duration, completionReachedRef.current, Boolean(targetItem.userMediaProgress?.isFinished));
+      const nextTime = clampTime(isCurrent() ? currentTimeRef.current : capturedTime, duration);
+      const timeListened = isCurrent() ? snapshotListeningSeconds() : capturedListeningSeconds;
+      const isFinished = playbackFinished(nextTime, duration, isCurrent() ? completionReachedRef.current : capturedCompletion, Boolean(targetItem.userMediaProgress?.isFinished));
 
       if (!options?.silent) {
         setBusyAction("syncing");
@@ -1119,11 +1128,14 @@ export function PlayerPanel({
         setPlayerStatus(mode === "close" ? "Saving progress..." : "Syncing to Audiobookshelf...");
       }
 
+      if (isCurrent()) setProgressSaveNotice({ state: "saving", message: "Saving progress…", retryable: false });
+      let failureStatus: number | undefined;
       try {
         const checkpointSequence = checkpointSequenceRef.current + 1;
         const sessionResponse = await fetch(`/api/session/${targetSession.id}/checkpoint`, {
           method: "POST",
           keepalive: mode === "close",
+          signal: AbortSignal.timeout(15000),
           headers: {
             "Content-Type": "application/json",
           },
@@ -1142,6 +1154,7 @@ export function PlayerPanel({
             },
           }),
         });
+        if (!sessionResponse.ok) failureStatus = sessionResponse.status;
         const sessionPayload = (await sessionResponse.json()) as {
           ok?: boolean;
           error?: string;
@@ -1149,27 +1162,32 @@ export function PlayerPanel({
         };
 
         if (!sessionResponse.ok) {
+          failureStatus = sessionResponse.status;
           throw new Error(sessionPayload.error ?? "Unable to sync the Audiobookshelf session.");
         }
 
         checkpointSequenceRef.current = checkpointSequence;
+        if (isCurrent()) {
+          failedCheckpointRef.current = null;
+          saveFailuresRef.current = 0;
+          setProgressSaveNotice({ state: "saved", message: "Progress saved to Audiobookshelf.", retryable: false });
+        }
 
-        if (sessionPayload.session?.id) {
+        if (sessionPayload.session?.id && isCurrent()) {
           setSession(sessionPayload.session);
           sessionRef.current = sessionPayload.session;
         }
 
-        resetListeningClock();
-        lastSyncedTimeRef.current = nextTime;
+        if (isCurrent()) { resetListeningClock(); lastSyncedTimeRef.current = nextTime; }
         publishProgress(targetItem.id, { duration, currentTime: nextTime, progress: isFinished ? 1 : nextTime / duration, isFinished, startedAt: targetItem.userMediaProgress?.startedAt || targetSession.startedAt || now, finishedAt: isFinished ? now : null, lastUpdate: now });
 
-        if (mode === "close") {
+        if (mode === "close" && isCurrent()) {
           setSession(null);
           sessionRef.current = null;
         }
 
         if (options?.refreshItem) {
-          await onItemRefresh(targetItem.id);
+          try { await onItemRefresh(targetItem.id); } catch { /* A refresh failure is not a failed save. */ }
         }
 
         if (!options?.silent) {
@@ -1182,8 +1200,11 @@ export function PlayerPanel({
 
         return true;
       } catch (error) {
-        if (!options?.silent) {
-          setPlayerError(error instanceof Error ? error.message : "Unable to sync playback progress.");
+        if (isCurrent()) {
+          const failure = progressSaveFailure(failureStatus);
+          failedCheckpointRef.current = { itemId: targetItem.id, sessionId: targetSession.id, mode };
+          saveFailuresRef.current++;
+          setProgressSaveNotice({ state: "failed", ...failure });
         }
         return false;
       } finally {
@@ -1354,6 +1375,9 @@ export function PlayerPanel({
     setBusyAction(null);
     setPlayerError(null);
     setPlayerStatus(null);
+    setProgressSaveNotice(null);
+    failedCheckpointRef.current = null;
+    saveFailuresRef.current = 0;
     listenedSecondsRef.current = 0;
     listenWindowStartRef.current = null;
 
@@ -1531,12 +1555,28 @@ export function PlayerPanel({
   }, [volume]);
 
   useEffect(() => {
+    if (!progressSaveNotice) return;
+    if (progressSaveNotice.state === "saved") {
+      const timeout = window.setTimeout(() => setProgressSaveNotice(null), 5000);
+      return () => window.clearTimeout(timeout);
+    }
+    if (progressSaveNotice.state !== "failed" || !progressSaveNotice.retryable) return;
+    const retry = () => {
+      const failed = failedCheckpointRef.current;
+      if (failed && failed.itemId === itemRef.current?.id && failed.sessionId === sessionRef.current?.id) void syncToAudiobookshelf(failed.mode, { silent: true });
+    };
+    const timeout = window.setTimeout(retry, progressRetryDelay(saveFailuresRef.current));
+    window.addEventListener("online", retry);
+    return () => { window.clearTimeout(timeout); window.removeEventListener("online", retry); };
+  }, [progressSaveNotice, syncToAudiobookshelf]);
+
+  useEffect(() => {
     if (!session?.id) {
       return;
     }
 
     const interval = window.setInterval(() => {
-      if (!isPlayingRef.current) {
+      if (!isPlayingRef.current || failedCheckpointRef.current) {
         return;
       }
 
@@ -2491,14 +2531,18 @@ export function PlayerPanel({
     const footerNotice = playerError ?? subtitleError ?? playerStatus ?? subtitleStatus;
     const footerNoticeIsError = Boolean(playerError || subtitleError);
 
-    if (!shouldShowSubtitleMeta && !footerNotice && !(isDock && onHide)) {
+    if (!shouldShowSubtitleMeta && !footerNotice && !progressSaveNotice && !(isDock && onHide)) {
       return null;
     }
 
     return (
       <section className="player-footer">
+        {progressSaveNotice ? <div className={`progress-save-feedback ${progressSaveNotice.state === "failed" ? "progress-save-feedback-failed" : ""}`} role="status" aria-live="polite">
+          <span>{progressSaveNotice.message}</span>
+          {progressSaveNotice.state === "failed" && progressSaveNotice.retryable ? <button className="button book-action-secondary button-compact" onClick={() => { const failed = failedCheckpointRef.current; if (failed) void syncToAudiobookshelf(failed.mode, { silent: true }); }} type="button">Retry now</button> : null}
+        </div> : null}
         <div className={`player-footer-row ${shouldShowSubtitleMeta ? "" : "player-footer-row-end"}`.trim()}>
-          {shouldShowSubtitleMeta ? (
+          {footerNotice || shouldShowSubtitleMeta ? (
             <div className="player-footer-notice" aria-live="polite">
               {footerNotice ? (
                 <p role={footerNoticeIsError ? "alert" : "status"} className={`status-message ${footerNoticeIsError ? "status-error" : ""}`.trim()}>

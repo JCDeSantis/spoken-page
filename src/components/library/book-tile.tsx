@@ -1,6 +1,6 @@
 import { listeningState, LISTENING_LABELS } from "@/lib/listening-status";
 import { LibraryItemMinified } from "@/lib/types";
-import { seriesDisplay } from "./library-utils";
+import { bookSeries } from "@/lib/series";
 
 type Props = {
   item: LibraryItemMinified;
@@ -9,7 +9,7 @@ type Props = {
   selected: boolean;
   wantToListen?: boolean;
   onSelect: () => void;
-  onSelectSeries: () => void;
+  onSelectSeries: (name: string) => void;
   onToggleFavorite: () => void;
 };
 
@@ -24,7 +24,7 @@ function PinIcon({ pinned }: { pinned: boolean }) {
 
 export function BookTile({ item, compact, favorite, selected, wantToListen, onSelect, onSelectSeries, onToggleFavorite }: Props) {
   const status = listeningState(item.userMediaProgress);
-  const series = seriesDisplay(item.media.metadata.seriesName);
+  const seriesEntries = bookSeries(item.media.metadata);
   const author = item.media.metadata.authorName ?? "Unknown author";
   const progress = item.userMediaProgress;
   const progressPercent = progress && progress.currentTime > 0
@@ -52,12 +52,12 @@ export function BookTile({ item, compact, favorite, selected, wantToListen, onSe
         <img alt="" className="book-tile-cover" src={`/api/items/${item.id}/cover`} />
         <strong className="book-tile-title" title={item.media.metadata.title}>{item.media.metadata.title}</strong>
       </button>
-      {series.name ? (
-        <button className="book-tile-series" onClick={onSelectSeries} title={`Filter by ${series.name}`} type="button">
+      {seriesEntries.map(series => (
+        <button key={series.id ?? series.name} className="book-tile-series" onClick={() => onSelectSeries(series.name)} title={`Filter by ${series.name}`} type="button">
           <span className="book-tile-series-name" title={series.name}>{series.name}</span>
           {series.number ? <span className="book-tile-series-number" title={`Book ${series.number}`}>#{series.number}</span> : null}
         </button>
-      ) : null}
+      ))}
       <span className="book-tile-author" title={author}>{author}</span>
       {status && statusLabel ? (
         <span className={`book-progress-label book-progress-${status}`}>{statusLabel}</span>

@@ -2,6 +2,8 @@
 
 Prepared October 1, 2026, against the current v1.2.1 implementation.
 
+Current scope update: offline phases and player redesign were subsequently skipped by the user. The original proposal below is retained for historical reference; those phases are not authorized upcoming work. Version 1.3.0 delivers search, listening status, remembered library preferences, series improvements and progress-save feedback.
+
 ## 1. Goals and delivery order
 
 Deliver three functional improvements before changing the player's visual design:

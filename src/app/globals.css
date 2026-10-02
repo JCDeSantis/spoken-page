@@ -863,6 +863,16 @@ img {
   gap: 0.55rem;
 }
 
+.next-series-preview { border-top: 1px solid var(--line); padding-top: .75rem; }
+.next-series-link { display: flex; align-items: center; gap: .8rem; width: 100%; padding: .65rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); color: var(--ink); text-align: left; cursor: pointer; }
+.next-series-link img { width: 64px; height: 64px; object-fit: contain; background: var(--cover-bg); border-radius: 7px; flex-shrink: 0; }
+.next-series-link > span { display: grid; gap: .25rem; min-width: 0; }
+.next-series-link small, .next-series-link > span > span { color: var(--ink-soft); font-size: .8rem; }
+.next-series-link:hover { border-color: var(--book-card-active-border); }
+.next-series-link:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.progress-save-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; font-size: .82rem; color: var(--ink-soft); padding-block: .4rem; }
+.progress-save-feedback-failed { color: var(--warning); }
+
 .button.book-action-primary,
 .button.book-action-secondary {
   color: var(--player-control-ink);
