@@ -35,14 +35,14 @@ describe("library utilities", () => {
     expect(selectedBookStatus()).toBeNull();
   });
 
-  it("uses only the saved Spoken Page status", () => {
+  it("sorts actual progress independently of legacy manual labels", () => {
     const started = book("started", "Started", undefined, 20);
     const untouched = book("untouched", "Untouched");
 
     expect(selectedBookStatus("finished")).toBe("finished");
     expect(selectedBookStatus("planned")).toBe("planned");
     expect(selectedBookStatus("unstarted")).toBe("unstarted");
-    expect(sortLibraryItems([started, untouched], "progress", { untouched: "finished" })[0]?.id).toBe("untouched");
+    expect(sortLibraryItems([started, untouched], "progress", { untouched: "finished" })[0]?.id).toBe("started");
   });
 
   it("resolves saved and recent books beyond the paginated library without changing that page", () => {

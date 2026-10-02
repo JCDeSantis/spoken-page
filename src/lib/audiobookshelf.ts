@@ -1,4 +1,5 @@
 import { APP_VERSION } from "@/lib/app-version";
+import { createHash } from "node:crypto";
 import { cookies } from "next/headers";
 import { createSession, deleteSession, readSession, updateSession } from "@/lib/session-store";
 import {
@@ -437,6 +438,7 @@ export async function loginToAudiobookshelf(baseUrl: string, username: string, p
       userId,
     } satisfies AudiobookshelfConnection,
     profile: {
+      preferenceScope: createHash("sha256").update(`${sanitized.baseUrl}\0${userId}`).digest("hex"),
       userId,
       username: payload.user.username,
       userType: payload.user.type,
@@ -447,6 +449,7 @@ export async function loginToAudiobookshelf(baseUrl: string, username: string, p
 }
 
 export async function authorize(connection?: AudiobookshelfConnection) {
+  const scopedConnection = connection ?? await getConnection();
   const payload = await absJson<{
     user: { id?: string; username: string; type: string };
     serverSettings: { version: string };
@@ -461,6 +464,7 @@ export async function authorize(connection?: AudiobookshelfConnection) {
   }
 
   return {
+    preferenceScope: scopedConnection ? createHash("sha256").update(`${scopedConnection.baseUrl}\0${payload.user.id ?? scopedConnection.userId ?? payload.user.username}`).digest("hex") : undefined,
     userId: payload.user.id ?? connection?.userId ?? payload.user.username,
     username: payload.user.username,
     userType: payload.user.type,
@@ -514,7 +518,7 @@ export async function getLibraryItem(itemId: string, connection?: Audiobookshelf
   if (!item || typeof item.id !== "string" || !item.media || typeof item.media.duration !== "number" || !item.media.metadata || typeof item.media.metadata.title !== "string") {
     throw new AudiobookshelfError("Audiobookshelf returned an invalid library item.", "invalid_response");
   }
-  return item;
+  return { ...item, userMediaProgress: item.userMediaProgress ?? null };
 }
 
 export async function getLibraryItemFile(

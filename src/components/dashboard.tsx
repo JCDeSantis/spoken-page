@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLibrarySearch } from "@/components/library/use-library-search";
+import { migrateLibraryPreferences, type LibraryPreferences } from "@/lib/library-preferences";
+import { listeningState, type ProgressAction } from "@/lib/listening-status";
+import { changeListeningProgress, PROGRESS_EVENT } from "@/lib/progress-client";
+import { parseLibraryQuery } from "@/lib/library-query";
+import type { MediaProgress } from "@/lib/types";
 import { PlayerPanel } from "@/components/player-panel";
 import { BookDetails } from "@/components/library/book-details";
 import { BookTile } from "@/components/library/book-tile";
@@ -12,8 +18,6 @@ import {
   BookStatusOverrides,
   LibrarySort,
   ProgressFilter,
-  selectedBookStatus,
-  sortLibraryItems,
   stripSeriesSuffix,
   unloadedShelfIds,
 } from "@/components/library/library-utils";
@@ -30,6 +34,7 @@ const PLAYED_RECENTS_STORAGE_KEY = "spoken-page-played-recents";
 const HIDDEN_RECENTS_STORAGE_KEY = "spoken-page-hidden-recents";
 const QUEUE_STORAGE_KEY = "spoken-page-queue";
 const STATUS_OVERRIDES_STORAGE_KEY = "spoken-page-status-overrides";
+const LIBRARY_PREFERENCES_STORAGE_KEY = "spoken-page-library-v2";
 
 function userStorageKey(base: string, userId: string) {
   return `${base}:${encodeURIComponent(userId)}`;
@@ -255,9 +260,9 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   const [activeLibraryId, setActiveLibraryId] = useState(
     initialProfile.userDefaultLibraryId ?? initialLibraries[0]?.id ?? "",
   );
-  const [items, setItems] = useState<LibraryItemMinified[]>([]);
-  const [itemsState, setItemsState] = useState<"idle" | "loading" | "error">("idle");
-  const [itemsError, setItemsError] = useState<string | null>(null);
+
+
+
   const [selectedItemId, setSelectedItemId] = useState<string>("");
   const [selectedItem, setSelectedItem] = useState<LibraryItemExpanded | null>(null);
   const [itemState, setItemState] = useState<"idle" | "loading" | "error">("idle");
@@ -280,29 +285,47 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   const [isPlayerInlineFullscreen, setIsPlayerInlineFullscreen] = useState(false);
   const [playerOpenToken, setPlayerOpenToken] = useState(0);
   const [queueIds, setQueueIds] = useState<string[]>([]);
-  const [statusOverrides, setStatusOverrides] = useState<BookStatusOverrides>({});
-  const [itemsPage, setItemsPage] = useState<{ total: number; page: number; limit: number } | null>(null);
-  const [itemsLibraryId, setItemsLibraryId] = useState("");
+  const [preferencesHydrated, setPreferencesHydrated] = useState(false);
+  const [planning, setPlanning] = useState<LibraryPreferences>(() => migrateLibraryPreferences(null));
+  const [wantFilter, setWantFilter] = useState(false);
+  const [hideCompleted, setHideCompleted] = useState(false);
+  const [urlReady, setUrlReady] = useState(false);
+  const [direction, setDirection] = useState("asc");
+  const preferenceScope = profile.preferenceScope ?? profile.userId;
+  const queryParams = new URLSearchParams({ q: filter, sort, direction, status: progressFilter === "planned" ? "all" : progressFilter, want: String(wantFilter), hideCompleted: String(hideCompleted), ...browseFilters });
+  const queryString = queryParams.toString();
+  const search = useLibrarySearch(activeLibraryId, queryString, urlReady && preferencesHydrated);
+  const { items, setItems, page: itemsPage, state: itemsState, error: itemsError, loadedLibrary: itemsLibraryId } = search;
+  const loadMoreItems = search.loadMore;
+  const loadItems = (_libraryId: string) => search.refresh(true);
+
+
   const [shelfItemsById, setShelfItemsById] = useState<Record<string, LibraryItemMinified>>({});
   const [resolvedShelfIds, setResolvedShelfIds] = useState<Set<string>>(() => new Set());
-  const [preferencesHydrated, setPreferencesHydrated] = useState(false);
+
   const requestedShelfIdsRef = useRef(new Set<string>());
-  const libraryPreferencesRef = useRef({ favoriteIds: [] as string[], playedRecentIds: [] as string[], hiddenRecentIds: [] as string[], queueIds: [] as string[], statusOverrides: {} as BookStatusOverrides });
+  const libraryPreferencesRef = useRef<LibraryPreferences>(migrateLibraryPreferences(null));
   const libraryPreferencesDirtyRef = useRef(false);
+  const preferencesWritableRef = useRef(false);
   const bookDetailsTriggerRef = useRef<HTMLElement | null>(null);
 
-  libraryPreferencesRef.current = { favoriteIds, playedRecentIds, hiddenRecentIds, queueIds, statusOverrides };
+  libraryPreferencesRef.current = { ...planning, favoriteIds, playedRecentIds, hiddenRecentIds, queueIds };
 
   async function saveLibraryPreferences() {
+    if (!preferencesWritableRef.current) return;
     try {
+      const saving = libraryPreferencesRef.current;
       const response = await fetch("/api/preferences/library", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ value: libraryPreferencesRef.current }),
+        body: JSON.stringify({ value: saving }),
       });
-      if (response.ok) libraryPreferencesDirtyRef.current = false;
+      if (!response.ok) throw new Error("Unable to save library preferences.");
+      libraryPreferencesDirtyRef.current = JSON.stringify(libraryPreferencesRef.current) !== JSON.stringify(saving);
+      search.refresh();
     } catch {
       libraryPreferencesDirtyRef.current = true;
+      setContinueError("Library preferences could not be saved. They will retry when the connection returns.");
     }
   }
 
@@ -315,83 +338,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
       if (!activeLibraryId && payload.libraries[0]) {
         setActiveLibraryId(payload.libraries[0].id);
       }
-    }
-  }
-
-  async function loadItems(libraryId: string) {
-    if (!libraryId) {
-      setItems([]);
-      setItemsLibraryId("");
-      setSelectedItem(null);
-      return;
-    }
-
-    setItemsState("loading");
-    setItemsError(null);
-
-    const response = await fetch(`/api/libraries/${libraryId}/items?page=0&limit=100`);
-    const payload = (await response.json()) as {
-      results?: LibraryItemMinified[];
-      total?: number;
-      page?: number;
-      limit?: number;
-      error?: string;
-    };
-
-    if (!response.ok || !payload.results) {
-      setItemsState("error");
-      setItemsError(payload.error ?? "Unable to load books from this library.");
-      return;
-    }
-
-    setItems(payload.results);
-    setItemsLibraryId(libraryId);
-    setItemsPage(
-      typeof payload.total === "number" && typeof payload.page === "number" && typeof payload.limit === "number"
-        ? { total: payload.total, page: payload.page, limit: payload.limit }
-        : null,
-    );
-    setItemsState("idle");
-
-    if (!payload.results.some((entry) => entry.id === selectedItemId)) {
-      const preferred =
-        payload.results.find((entry) => !entry.userMediaProgress?.isFinished) ?? payload.results[0] ?? null;
-      setSelectedItemId(preferred?.id ?? "");
-    }
-  }
-
-  async function loadMoreItems() {
-    if (!activeLibraryId || !itemsPage || itemsState === "loading" || items.length >= itemsPage.total) return;
-    setItemsState("loading");
-    setItemsError(null);
-    try {
-      const nextPage = itemsPage.page + 1;
-      const response = await fetch(
-        `/api/libraries/${activeLibraryId}/items?page=${nextPage}&limit=${itemsPage.limit}`,
-      );
-      const payload = (await response.json()) as {
-        results?: LibraryItemMinified[];
-        total?: number;
-        page?: number;
-        limit?: number;
-        error?: string;
-      };
-      if (!response.ok || !payload.results) {
-        throw new Error(payload.error ?? "Unable to load more books.");
-      }
-      setItems((current) => {
-        const known = new Set(current.map((entry) => entry.id));
-        return [...current, ...payload.results!.filter((entry) => !known.has(entry.id))];
-      });
-      setItemsPage({
-        total: payload.total ?? itemsPage.total,
-        page: payload.page ?? nextPage,
-        limit: payload.limit ?? itemsPage.limit,
-      });
-      setItemsState("idle");
-    } catch (error) {
-      setItemsState("error");
-      setItemsError(error instanceof Error ? error.message : "Unable to load more books.");
     }
   }
 
@@ -464,6 +410,8 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
 
   function clearBrowseSearchAndFilters() {
     setFilter("");
+    setWantFilter(false);
+    setHideCompleted(false);
     setBrowseFilters({ ...EMPTY_BROWSE_FILTERS });
     setProgressFilter("all");
   }
@@ -504,7 +452,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     setPlayerOpenToken((current) => current + 1);
     setIsPlayerOpen(true);
     setHiddenRecentIds((current) => current.filter((entry) => entry !== itemId));
-    rememberRecent(itemId);
   }
 
   function closeBookDetails(restoreFocus = true) {
@@ -516,6 +463,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   }
 
   function toggleFavorite(itemId: string) {
+    if (!preferencesWritableRef.current) return;
     setFavoriteIds((current) =>
       current.includes(itemId)
         ? current.filter((entry) => entry !== itemId)
@@ -523,86 +471,55 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     );
   }
 
-  function setBookStatus(itemId: string, status: BookProgressStatus | null) {
-    setStatusOverrides((current) => {
-      if (status) return { ...current, [itemId]: status };
-      const next = { ...current };
-      delete next[itemId];
-      return next;
-    });
+  function toggleWant(itemId: string) {
+    if (!preferencesWritableRef.current) return;
+    setPlanning(current => ({ ...current, wantToListenIds: current.wantToListenIds.includes(itemId) ? current.wantToListenIds.filter(id => id !== itemId) : [...current.wantToListenIds, itemId] }));
   }
 
-  async function markContinueComplete(item: LibraryItemMinified) {
+  async function applyProgressAction(item: LibraryItemMinified, action: ProgressAction) {
     if (completingItemId) return;
-    const duration = item.userMediaProgress?.duration || item.media.duration;
-    const finishedAt = Date.now();
-    setCompletingItemId(item.id);
-    setContinueError(null);
-
+    if (action === "restart" && !window.confirm("Start this book over? This resets its listening position and completion in Audiobookshelf.")) return;
+    setCompletingItemId(item.id); setContinueError(null);
     try {
-      const response = await fetch(`/api/me/progress/${encodeURIComponent(item.id)}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          duration,
-          progress: 1,
-          currentTime: duration,
-          isFinished: true,
-          finishedAt,
-          startedAt: item.userMediaProgress?.startedAt,
-        }),
-      });
-      if (!response.ok) throw new Error("Could not mark this book complete. Please try again.");
-
-      const finishedProgress = {
-        ...item.userMediaProgress,
-        duration,
-        progress: 1,
-        currentTime: duration,
-        isFinished: true,
-        finishedAt,
-      };
-      setBookStatus(item.id, "finished");
-      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, userMediaProgress: finishedProgress } : entry));
-      setShelfItemsById((current) => current[item.id]
-        ? { ...current, [item.id]: { ...current[item.id], userMediaProgress: finishedProgress } }
-        : current);
-      setSelectedItem((current) => current?.id === item.id ? { ...current, userMediaProgress: finishedProgress } : current);
-    } catch (error) {
-      setContinueError(error instanceof Error ? error.message : "Could not mark this book complete.");
-    } finally {
-      setCompletingItemId("");
-    }
+      await changeListeningProgress(item.id, action);
+      search.refresh();
+    } catch (error) { setContinueError(error instanceof Error ? error.message : "Unable to save progress."); }
+    finally { setCompletingItemId(""); }
   }
+  const markContinueComplete = (item: LibraryItemMinified) => applyProgressAction(item, "complete");
 
   useEffect(() => {
     void loadLibraries();
     const local = {
-      favoriteIds: parseStoredIds(window.localStorage.getItem(userStorageKey(FAVORITES_STORAGE_KEY, profile.userId))),
-      playedRecentIds: parseStoredIds(window.localStorage.getItem(userStorageKey(PLAYED_RECENTS_STORAGE_KEY, profile.userId))),
-      hiddenRecentIds: parseStoredIds(window.localStorage.getItem(userStorageKey(HIDDEN_RECENTS_STORAGE_KEY, profile.userId))),
-      queueIds: parseStoredIds(window.localStorage.getItem(userStorageKey(QUEUE_STORAGE_KEY, profile.userId))),
+      favoriteIds: parseStoredIds(window.localStorage.getItem(userStorageKey(FAVORITES_STORAGE_KEY, preferenceScope))),
+      playedRecentIds: parseStoredIds(window.localStorage.getItem(userStorageKey(PLAYED_RECENTS_STORAGE_KEY, preferenceScope))),
+      hiddenRecentIds: parseStoredIds(window.localStorage.getItem(userStorageKey(HIDDEN_RECENTS_STORAGE_KEY, preferenceScope))),
+      queueIds: parseStoredIds(window.localStorage.getItem(userStorageKey(QUEUE_STORAGE_KEY, preferenceScope))),
       statusOverrides: parseStatusOverrides(window.localStorage.getItem(userStorageKey(STATUS_OVERRIDES_STORAGE_KEY, profile.userId))),
     };
     setFavoriteIds(local.favoriteIds);
     setPlayedRecentIds(local.playedRecentIds);
     setHiddenRecentIds(local.hiddenRecentIds);
     setQueueIds(local.queueIds);
-    setStatusOverrides(local.statusOverrides);
+    const cachedPreferences = window.localStorage.getItem(userStorageKey(LIBRARY_PREFERENCES_STORAGE_KEY, preferenceScope));
+    try { setPlanning(migrateLibraryPreferences(cachedPreferences ? JSON.parse(cachedPreferences) : local)); }
+    catch { setPlanning(migrateLibraryPreferences(local)); }
 
     void (async () => {
       try {
         const response = await fetch("/api/preferences/library");
-        const payload = (await response.json()) as { value?: Partial<typeof local> };
-        if (response.ok && payload.value) {
+        const payload = (await response.json()) as { value?: Partial<typeof local> & Partial<LibraryPreferences> };
+        if (!response.ok || !payload.value) throw new Error("Unable to load library preferences.");
+        if (payload.value) {
           setFavoriteIds(Array.isArray(payload.value.favoriteIds) ? payload.value.favoriteIds : local.favoriteIds);
           setPlayedRecentIds(Array.isArray(payload.value.playedRecentIds) ? payload.value.playedRecentIds : local.playedRecentIds);
           setHiddenRecentIds(Array.isArray(payload.value.hiddenRecentIds) ? payload.value.hiddenRecentIds : local.hiddenRecentIds);
           setQueueIds(Array.isArray(payload.value.queueIds) ? payload.value.queueIds : local.queueIds);
-          setStatusOverrides(parseStatusOverrides(payload.value.statusOverrides ?? local.statusOverrides));
+          setPlanning(migrateLibraryPreferences(payload.value));
+          preferencesWritableRef.current = true;
         }
       } catch {
-        // Local storage remains the source of truth while the server is unavailable.
+        setContinueError("Your saved preferences could not be loaded. Refresh the page to retry before editing pins or Want to listen.");
       } finally {
         setPreferencesHydrated(true);
       }
@@ -610,36 +527,32 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(userStorageKey(FAVORITES_STORAGE_KEY, profile.userId), JSON.stringify(favoriteIds));
+    if (preferencesHydrated) window.localStorage.setItem(userStorageKey(FAVORITES_STORAGE_KEY, preferenceScope), JSON.stringify(favoriteIds));
   }, [favoriteIds, profile.userId]);
 
   useEffect(() => {
-    window.localStorage.setItem(userStorageKey(PLAYED_RECENTS_STORAGE_KEY, profile.userId), JSON.stringify(playedRecentIds));
+    if (preferencesHydrated) window.localStorage.setItem(userStorageKey(PLAYED_RECENTS_STORAGE_KEY, preferenceScope), JSON.stringify(playedRecentIds));
   }, [playedRecentIds, profile.userId]);
 
   useEffect(() => {
-    window.localStorage.setItem(userStorageKey(HIDDEN_RECENTS_STORAGE_KEY, profile.userId), JSON.stringify(hiddenRecentIds));
+    if (preferencesHydrated) window.localStorage.setItem(userStorageKey(HIDDEN_RECENTS_STORAGE_KEY, preferenceScope), JSON.stringify(hiddenRecentIds));
   }, [hiddenRecentIds, profile.userId]);
 
   useEffect(() => {
-    window.localStorage.setItem(userStorageKey(QUEUE_STORAGE_KEY, profile.userId), JSON.stringify(queueIds));
+    if (preferencesHydrated) window.localStorage.setItem(userStorageKey(QUEUE_STORAGE_KEY, preferenceScope), JSON.stringify(queueIds));
   }, [profile.userId, queueIds]);
 
-  useEffect(() => {
-    window.localStorage.setItem(
-      userStorageKey(STATUS_OVERRIDES_STORAGE_KEY, profile.userId),
-      JSON.stringify(statusOverrides),
-    );
-  }, [profile.userId, statusOverrides]);
+
 
   useEffect(() => {
     if (!preferencesHydrated) return;
+    window.localStorage.setItem(userStorageKey(LIBRARY_PREFERENCES_STORAGE_KEY, preferenceScope), JSON.stringify(libraryPreferencesRef.current));
     libraryPreferencesDirtyRef.current = true;
     const timeout = window.setTimeout(() => {
       void saveLibraryPreferences();
     }, 600);
     return () => window.clearTimeout(timeout);
-  }, [favoriteIds, hiddenRecentIds, playedRecentIds, preferencesHydrated, queueIds, statusOverrides]);
+  }, [favoriteIds, hiddenRecentIds, playedRecentIds, preferencesHydrated, queueIds, planning]);
 
   useEffect(() => {
     const handleOnline = () => {
@@ -649,9 +562,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     return () => window.removeEventListener("online", handleOnline);
   }, []);
 
-  useEffect(() => {
-    void loadItems(activeLibraryId);
-  }, [activeLibraryId]);
+
 
   useEffect(() => {
     if (!activeLibraryId || itemsLibraryId !== activeLibraryId || !preferencesHydrated) return;
@@ -689,6 +600,17 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
       }
     })();
   }, [activeLibraryId, favoriteIds, items, itemsLibraryId, playedRecentIds, preferencesHydrated, queueIds, shelfItemsById]);
+
+  useEffect(() => {
+    if (!itemsPage?.shelfItems || itemsLibraryId !== activeLibraryId) return;
+    setShelfItemsById(Object.fromEntries(itemsPage.shelfItems.map(item => [item.id, item])));
+    // Update the details status without replacing its expanded chapters/tracks.
+    const fresh = [...itemsPage.results, ...itemsPage.shelfItems];
+    setSelectedItem(current => {
+      const match = current && fresh.find(item => item.id === current.id);
+      return current && match ? { ...current, userMediaProgress: match.userMediaProgress } : current;
+    });
+  }, [itemsPage, itemsLibraryId, activeLibraryId]);
 
   useEffect(() => {
     void loadFilterData(activeLibraryId);
@@ -749,14 +671,53 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     };
   }, [isBookDetailsOpen]);
 
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const { itemId, progress } = (event as CustomEvent<{ itemId: string; progress: MediaProgress | null }>).detail;
+      setItems(current => current.map(item => item.id === itemId ? { ...item, userMediaProgress: progress } : item));
+      setShelfItemsById(current => current[itemId] ? { ...current, [itemId]: { ...current[itemId], userMediaProgress: progress } } : current);
+      setSelectedItem(current => current?.id === itemId ? { ...current, userMediaProgress: progress } : current);
+      if (progress && (progress.startedAt || progress.currentTime > 0)) {
+        rememberRecent(itemId);
+        setPlanning(current => current.wantToListenIds.includes(itemId) ? { ...current, wantToListenIds: current.wantToListenIds.filter(id => id !== itemId) } : current);
+      }
+    };
+    window.addEventListener(PROGRESS_EVENT, receive);
+    return () => window.removeEventListener(PROGRESS_EVENT, receive);
+  }, []);
+
+  useEffect(() => {
+    const restore = () => {
+      try {
+        const params = new URLSearchParams(window.location.search); const query = parseLibraryQuery(params);
+        setFilter(query.q); setSort(query.sort); setDirection(query.direction); setProgressFilter(query.status); setWantFilter(query.want);
+        setHideCompleted(query.hideCompleted);
+        setBrowseFilters({ genre: query.genre, tag: query.tag, author: query.author, narrator: query.narrator, series: query.series, language: query.language });
+        const library = params.get("library"); if (library && libraries.some(item => item.id === library)) setActiveLibraryId(library);
+      } catch { /* Invalid URL query falls back to the visible controls. */ }
+      setUrlReady(true);
+    };
+    restore(); window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
+  useEffect(() => {
+    if (!urlReady) return;
+    const timeout = window.setTimeout(() => {
+      const params = new URLSearchParams(queryString); params.set("library", activeLibraryId);
+      const next = "?" + params.toString();
+      if (next !== window.location.search) window.history.pushState(null, "", next);
+    }, 350);
+    return () => window.clearTimeout(timeout);
+  }, [queryString, activeLibraryId, urlReady]);
+
   const availableFilterData = useMemo(
     () => libraryFilterData ?? deriveFilterData(items),
     [items, libraryFilterData],
   );
 
   const activeFilterCount = useMemo(
-    () => Object.values(browseFilters).filter(Boolean).length + (progressFilter === "all" ? 0 : 1),
-    [browseFilters, progressFilter],
+    () => Object.values(browseFilters).filter(Boolean).length + (progressFilter === "all" ? 0 : 1) + (wantFilter ? 1 : 0) + (hideCompleted ? 1 : 0),
+    [browseFilters, progressFilter, wantFilter, hideCompleted],
   );
 
   const activeBrowseFilters = useMemo(
@@ -779,43 +740,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
     [browseFilters],
   );
 
-  const filteredItems = useMemo(() => {
-    const query = filter.trim().toLowerCase();
-
-    return sortLibraryItems(items.filter((entry) => {
-      const title = entry.media.metadata.title.toLowerCase();
-      const author = entry.media.metadata.authorName?.toLowerCase() ?? "";
-      const narrator = entry.media.metadata.narratorName?.toLowerCase() ?? "";
-      const matchesQuery =
-        !query || title.includes(query) || author.includes(query) || narrator.includes(query);
-      const matchesGenre =
-        !browseFilters.genre ||
-        (entry.media.metadata.genres ?? []).some(
-          (genre) => normalizeValue(genre) === normalizeValue(browseFilters.genre),
-        );
-      const matchesTag =
-        !browseFilters.tag ||
-        (entry.media.tags ?? []).some((tag) => normalizeValue(tag) === normalizeValue(browseFilters.tag));
-      const matchesAuthor = matchesDelimitedValue(entry.media.metadata.authorName, browseFilters.author);
-      const matchesNarrator = matchesDelimitedValue(entry.media.metadata.narratorName, browseFilters.narrator);
-      const matchesSeries = matchesSeriesValue(entry.media.metadata.seriesName, browseFilters.series);
-      const matchesLanguage =
-        !browseFilters.language ||
-        normalizeValue(entry.media.metadata.language) === normalizeValue(browseFilters.language);
-
-      const matchesProgress = progressFilter === "all" || selectedBookStatus(statusOverrides[entry.id]) === progressFilter;
-      return (
-        matchesQuery &&
-        matchesGenre &&
-        matchesTag &&
-        matchesAuthor &&
-        matchesNarrator &&
-        matchesSeries &&
-        matchesLanguage &&
-        matchesProgress
-      );
-    }), sort, statusOverrides);
-  }, [browseFilters, filter, items, progressFilter, sort, statusOverrides]);
+  const filteredItems = items;
 
   const itemsById = useMemo(
     () => libraryItemsById(activeLibraryId, items, shelfItemsById),
@@ -831,22 +756,18 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
   );
 
   const continueItem = useMemo(() =>
-    [...itemsById.values()]
+    [...new Map([...(itemsPage?.continueItem ? [[itemsPage.continueItem.id, itemsPage.continueItem] as const] : []), ...itemsById]).values()]
       .filter((entry) => {
         const progress = entry.userMediaProgress;
-        return progress && statusOverrides[entry.id] !== "finished" && !hiddenRecentIds.includes(entry.id) && progress.currentTime > 0 && !progress.isFinished &&
-          progress.currentTime < (progress.duration || entry.media.duration);
+        return listeningState(progress) === "in-progress" && !hiddenRecentIds.includes(entry.id);
       })
       .sort((left, right) => (right.userMediaProgress?.lastUpdate ?? 0) - (left.userMediaProgress?.lastUpdate ?? 0))[0] ?? null,
-  [hiddenRecentIds, itemsById, statusOverrides]);
+  [hiddenRecentIds, itemsById, itemsPage]);
   const continueDuration = continueItem?.userMediaProgress?.duration || continueItem?.media.duration || 0;
   const continueCurrentTime = continueItem?.userMediaProgress?.currentTime ?? 0;
   const continuePercent = continueDuration > 0 ? Math.round(Math.min(100, continueCurrentTime / continueDuration * 100)) : 0;
 
-  const browseItems = useMemo(() => {
-    const pinnedIds = new Set(favoriteIds);
-    return filteredItems.filter((entry) => !pinnedIds.has(entry.id));
-  }, [favoriteIds, filteredItems]);
+  const browseItems = filteredItems;
 
   const activeLibrary = libraries.find((library) => library.id === activeLibraryId) ?? null;
 
@@ -859,9 +780,9 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
 
   function renderBookTile(entry: LibraryItemMinified, section: "all" | "pinned") {
     const isFavorite = favoriteIds.includes(entry.id);
-    const isSelected = entry.id === selectedItemId;
+    const isSelected = entry.id === selectedItemId && (isBookDetailsOpen || isPlayerOpen);
 
-    return <BookTile key={`${section}-${entry.id}`} item={entry} compact={section === "pinned"} favorite={isFavorite} selected={isSelected} status={statusOverrides[entry.id]} onSelect={() => handleBookSelect(entry.id)} onSelectSeries={() => showSeries(entry.media.metadata.seriesName)} onToggleFavorite={() => toggleFavorite(entry.id)} />;
+    return <BookTile key={`${section}-${entry.id}`} item={entry} compact={section === "pinned"} favorite={isFavorite} selected={isSelected} wantToListen={planning.wantToListenIds.includes(entry.id)} onSelect={() => handleBookSelect(entry.id)} onSelectSeries={() => showSeries(entry.media.metadata.seriesName)} onToggleFavorite={() => toggleFavorite(entry.id)} />;
   }
 
   function showSeries(seriesName: string | null | undefined) {
@@ -900,12 +821,14 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
               ))}
             </select>
 
+            <button className="button button-secondary" onClick={() => { search.refresh(true); void loadFilterData(activeLibraryId); }} type="button">Refresh library</button>
             <button className="button button-secondary" onClick={disconnect} type="button">
               Sign out
             </button>
           </div>
         </div>
 
+        {continueError && !isBookDetailsOpen ? <p role="alert" className="status-message status-error">{continueError}</p> : null}
         {continueItem ? (
           <section className="continue-listening" aria-label="Continue listening">
             <button className="continue-listening-book" onClick={() => handleBookSelect(continueItem.id)} type="button">
@@ -921,7 +844,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
               </span>
             </button>
             <div className="continue-listening-actions">
-              <button className="button button-secondary" disabled={Boolean(completingItemId)} onClick={() => void markContinueComplete(continueItem)} type="button">{completingItemId ? "Saving…" : "Mark complete"}</button>
+              <button className="button book-action-secondary" disabled={Boolean(completingItemId)} onClick={() => void markContinueComplete(continueItem)} type="button">{completingItemId ? "Saving…" : "Mark complete"}</button>
               <button className="button button-primary continue-listening-resume" onClick={() => resumeBook(continueItem.id)} type="button">Resume</button>
             </div>
             {continueError ? <p className="continue-listening-error status-error" role="alert">{continueError}</p> : null}
@@ -956,7 +879,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
             <div>
               <h3>Browse books</h3>
             </div>
-            <span className="section-count">{browseItems.length}</span>
+            <span className="section-count">{itemsPage?.total ?? "…"}</span>
           </div>
 
           <div className="all-books-searchbar">
@@ -965,31 +888,34 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
                 aria-label="Search book library"
                 className="library-search"
                 onChange={(event) => setFilter(event.target.value)}
-                placeholder="Search by title, author, or narrator"
+                placeholder="Search the entire library"
                 value={filter}
               />
             </label>
 
             <label className="field library-compact-field">
               <span>Sort</span>
-              <select aria-label="Sort books" onChange={(event) => setSort(event.target.value as LibrarySort)} value={sort}>
+              <select aria-label="Sort books" onChange={(event) => { setSort(event.target.value as LibrarySort); setDirection(["recent", "progress", "year"].includes(event.target.value) ? "desc" : "asc"); }} value={sort}>
                 <option value="title">Title</option>
                 <option value="recent">Recently played</option>
                 <option value="progress">Progress</option>
                 <option value="author">Author</option>
+                <option value="series">Series</option>
                 <option value="year">Publication year</option>
                 <option value="duration">Duration</option>
               </select>
             </label>
 
+
             <label className="field library-compact-field">
               <span>Status</span>
-              <select aria-label="Filter by listening status" onChange={(event) => setProgressFilter(event.target.value as ProgressFilter)} value={progressFilter}>
+              <select aria-label="Filter by listening status" onChange={(event) => { const want = event.target.value === "want"; setWantFilter(want); setProgressFilter(want ? "all" : event.target.value as ProgressFilter); if (event.target.value === "finished") setHideCompleted(false); }} value={wantFilter ? "want" : progressFilter}>
                 <option value="all">All books</option>
-                <option value="planned">Planned</option>
+
                 <option value="unstarted">Not started</option>
                 <option value="in-progress">In progress</option>
-                <option value="finished">Finished</option>
+                <option value="finished">Completed</option>
+                <option value="want">Want to listen</option>
               </select>
             </label>
 
@@ -1014,22 +940,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
               </summary>
 
               <div className="library-filter-dropdown-body">
-                <div className="library-filter-dropdown-head">
-                  <div>
-                    <p className="eyebrow">Refine Shelf</p>
-                    <h4>Browse filters</h4>
-                  </div>
-
-                  <button
-                    className="button button-secondary button-compact"
-                    disabled={activeFilterCount === 0}
-                    onClick={clearBrowseSearchAndFilters}
-                    type="button"
-                  >
-                    Clear all
-                  </button>
-                </div>
-
                 {libraryFilterState === "loading" ? (
                   <p className="library-filter-status">Loading Audiobookshelf filters...</p>
                 ) : null}
@@ -1142,8 +1052,18 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
                     </select>
                   </label>
                 </div>
+                <div className="library-filter-toggles">
+                  <button className="button book-action-secondary want-listen-button" aria-pressed={hideCompleted} onClick={() => { setHideCompleted(current => !current); if (!hideCompleted && progressFilter === "finished") setProgressFilter("all"); }} type="button">Hide completed</button>
+                  <button className="button book-action-secondary" disabled={activeFilterCount === 0} onClick={clearBrowseSearchAndFilters} type="button">Clear all</button>
+                </div>
               </div>
             </details>
+            <button className="button book-action-secondary library-sort-direction" aria-label={`Sort ${direction === "asc" ? "ascending" : "descending"}. Switch to ${direction === "asc" ? "descending" : "ascending"}`} title={direction === "asc" ? "Ascending — switch to descending" : "Descending — switch to ascending"} onClick={() => setDirection(current => current === "asc" ? "desc" : "asc")} type="button">
+              <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <g opacity={direction === "asc" ? 1 : .35}><path d="M7 19V5m-4 4 4-4 4 4" /></g>
+                <g opacity={direction === "desc" ? 1 : .35}><path d="M17 5v14m-4-4 4 4 4-4" /></g>
+              </svg>
+            </button>
           </div>
 
           {activeBrowseFilters.length > 0 ? (
@@ -1167,10 +1087,11 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
             </div>
           ) : null}
 
+          {hideCompleted ? <div className="all-books-active-filters"><button className="filter-chip-pill" onClick={() => setHideCompleted(false)} type="button"><span>Hide completed</span><span aria-hidden="true">×</span></button></div> : null}
           {progressFilter !== "all" ? <div className="all-books-active-filters"><button className="filter-chip-pill" onClick={() => setProgressFilter("all")} type="button"><span>Status: {progressFilter.replace("-", " ")}</span><span aria-hidden="true">×</span></button></div> : null}
 
-          {itemsState === "loading" ? <p className="status-message">Loading books...</p> : null}
-          {itemsError ? <p className="status-message status-error">{itemsError}</p> : null}
+          {itemsState === "loading" ? <p role="status" className="status-message">{search.preparing ? `${search.preparing.verifying ? "Verifying" : "Preparing"} library search: ${search.preparing.processed} of ${search.preparing.total || "…"} books…` : items.length ? "Updating library results…" : "Preparing complete library search…"}</p> : null}
+          {itemsError ? <p role="alert" className="status-message status-error">{itemsError} <button className="button button-secondary" onClick={() => search.refresh(true)} type="button">Try again</button></p> : null}
 
           <div className="book-tile-grid">
             {browseItems.map((entry) => renderBookTile(entry, "all"))}
@@ -1178,7 +1099,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
 
           {itemsPage && itemsPage.total > items.length ? (
             <div className="pagination-actions">
-              <p className="status-message">Showing {items.length} of {itemsPage.total} books.</p>
+              <p className="status-message">Showing {items.length} of {itemsPage.total} matching books.</p>
               <button className="button button-secondary" disabled={itemsState === "loading"} onClick={() => void loadMoreItems()} type="button">
                 {itemsState === "loading" ? "Loading…" : "Load more books"}
               </button>
@@ -1186,7 +1107,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
           ) : null}
 
           {itemsState === "idle" && browseItems.length === 0 ? (
-            <p className="status-message">{filteredItems.length > 0 ? "All matching books are pinned above." : "No audiobooks matched that filter."}</p>
+            <p className="status-message">No audiobooks in this library match your search and filters.</p>
           ) : null}
         </section>
 
@@ -1230,10 +1151,13 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
               }}
               onResume={handleResume}
               onSelectSeries={() => showSeries(selectedItem?.media.metadata.seriesName)}
-              status={selectedBookStatus(selectedItem ? statusOverrides[selectedItem.id] : undefined)}
-              onStatusChange={(status) => {
-                if (selectedItem) setBookStatus(selectedItem.id, status);
-              }}
+              wantToListen={Boolean(selectedItem && planning.wantToListenIds.includes(selectedItem.id))}
+              onToggleWant={() => { if (selectedItem) toggleWant(selectedItem.id); }}
+              onProgressAction={(action) => { if (selectedItem) void applyProgressAction(selectedItem, action); }}
+              progressBusy={Boolean(completingItemId)}
+              progressError={continueError}
+              legacyStatus={selectedItem && !planning.dismissedLegacyIds.includes(selectedItem.id) ? planning.legacyStatusOverrides[selectedItem.id] : undefined}
+              onDismissLegacy={() => { if (selectedItem) setPlanning(current => ({ ...current, dismissedLegacyIds: [...current.dismissedLegacyIds, selectedItem.id] })); }}
               queue={queueItems}
             />
           </section>
@@ -1252,7 +1176,7 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
             {itemError ? <p className="status-message status-error">{itemError}</p> : null}
             <PlayerPanel
               item={selectedItem}
-              preferenceScope={profile.userId}
+              preferenceScope={preferenceScope}
               onHide={() => {
                 setIsPlayerInlineFullscreen(false);
                 setIsPlayerOpen(false);

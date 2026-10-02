@@ -1,38 +1,36 @@
+import { listeningState, LISTENING_LABELS } from "@/lib/listening-status";
 import { LibraryItemMinified } from "@/lib/types";
-import { BookProgressStatus, selectedBookStatus, seriesDisplay } from "./library-utils";
+import { seriesDisplay } from "./library-utils";
 
 type Props = {
   item: LibraryItemMinified;
   compact?: boolean;
   favorite: boolean;
   selected: boolean;
-  status?: BookProgressStatus;
+  wantToListen?: boolean;
   onSelect: () => void;
   onSelectSeries: () => void;
   onToggleFavorite: () => void;
 };
 
-export function BookTile({ item, compact, favorite, selected, status: savedStatus, onSelect, onSelectSeries, onToggleFavorite }: Props) {
-  const status = selectedBookStatus(savedStatus);
+function PinIcon({ pinned }: { pinned: boolean }) {
+  return <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <g transform="rotate(35 12 12)">
+      <path d="M8 3h8l-1 7 3 3v2H6v-2l3-3z" fill={pinned ? "currentColor" : "none"} />
+      <path d="M12 15v6" />
+    </g>
+  </svg>;
+}
+
+export function BookTile({ item, compact, favorite, selected, wantToListen, onSelect, onSelectSeries, onToggleFavorite }: Props) {
+  const status = listeningState(item.userMediaProgress);
   const series = seriesDisplay(item.media.metadata.seriesName);
   const author = item.media.metadata.authorName ?? "Unknown author";
   const progress = item.userMediaProgress;
   const progressPercent = progress && progress.currentTime > 0
     ? Math.round(Math.min(100, progress.currentTime / (progress.duration || item.media.duration || 1) * 100))
     : 0;
-  const statusLabel = status === "finished"
-    ? "Completed"
-    : status === "in-progress"
-      ? `In progress${progressPercent ? ` · ${progressPercent}%` : ""}`
-      : status === "planned"
-        ? "Planned"
-        : status === "unstarted"
-          ? "Not started"
-          : progress?.isFinished
-            ? "Completed"
-            : progressPercent > 0
-              ? `In progress · ${progressPercent}%`
-              : null;
+  const statusLabel = `${LISTENING_LABELS[status]}${status === "in-progress" && progressPercent ? ` · ${progressPercent}%` : ""}${wantToListen ? " · Want to listen" : ""}`;
   if (compact) {
     return (
       <article className={`book-tile book-tile-compact ${selected ? "book-tile-active" : ""}`}>
@@ -44,7 +42,7 @@ export function BookTile({ item, compact, favorite, selected, status: savedStatu
             {statusLabel ? <span className="book-progress-label">{statusLabel}</span> : null}
           </span>
         </button>
-        <button aria-label={`Unpin ${item.media.metadata.title}`} aria-pressed="true" className="favorite-chip favorite-chip-active" onClick={onToggleFavorite} type="button">Unpin</button>
+        <button aria-label={`Unpin ${item.media.metadata.title}`} title="Unpin book" aria-pressed="true" className="favorite-chip favorite-chip-active" onClick={onToggleFavorite} type="button"><PinIcon pinned /></button>
       </article>
     );
   }
@@ -69,8 +67,8 @@ export function BookTile({ item, compact, favorite, selected, status: savedStatu
           <span style={{ width: `${progressPercent}%` }} />
         </span>
       ) : null}
-      <button aria-label={favorite ? `Unpin ${item.media.metadata.title}` : `Pin ${item.media.metadata.title}`} aria-pressed={favorite} className={`favorite-chip ${favorite ? "favorite-chip-active" : ""}`} onClick={onToggleFavorite} type="button">
-        <span className="favorite-chip-label"><span className="favorite-chip-text favorite-chip-text-default">{favorite ? "Pinned" : "Pin"}</span>{favorite ? <span className="favorite-chip-text favorite-chip-text-hover">Unpin</span> : null}</span>
+      <button aria-label={favorite ? `Unpin ${item.media.metadata.title}` : `Pin ${item.media.metadata.title}`} title={favorite ? "Unpin book" : "Pin book"} aria-pressed={favorite} className={`favorite-chip ${favorite ? "favorite-chip-active" : ""}`} onClick={onToggleFavorite} type="button">
+        <PinIcon pinned={favorite} />
       </button>
     </article>
   );

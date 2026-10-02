@@ -1,6 +1,6 @@
 import { LibraryItemMinified } from "@/lib/types";
 
-export type LibrarySort = "title" | "recent" | "progress" | "author" | "year" | "duration";
+export type LibrarySort = "title" | "recent" | "progress" | "author" | "series" | "year" | "duration";
 export type ProgressFilter = "all" | "planned" | "unstarted" | "in-progress" | "finished";
 export type BookProgressStatus = Exclude<ProgressFilter, "all">;
 export type BookStatusOverrides = Record<string, BookProgressStatus>;
@@ -86,6 +86,9 @@ export function sortLibraryItems(items: LibraryItemMinified[], sort: LibrarySort
       case "author":
         return normalized(leftMetadata.authorName).localeCompare(normalized(rightMetadata.authorName)) ||
           normalized(leftMetadata.title).localeCompare(normalized(rightMetadata.title));
+      case "series":
+        return normalized(leftMetadata.seriesName).localeCompare(normalized(rightMetadata.seriesName), undefined, { numeric: true }) ||
+          normalized(leftMetadata.title).localeCompare(normalized(rightMetadata.title));
       case "year":
         return Number(rightMetadata.publishedYear ?? 0) - Number(leftMetadata.publishedYear ?? 0) ||
           normalized(leftMetadata.title).localeCompare(normalized(rightMetadata.title));
@@ -97,13 +100,8 @@ export function sortLibraryItems(items: LibraryItemMinified[], sort: LibrarySort
   });
 }
 
-function progressSortValue(_item: LibraryItemMinified, selectedStatus?: BookProgressStatus) {
-  const status = selectedBookStatus(selectedStatus);
-  if (status === "finished") return 3;
-  if (status === "in-progress") return 2;
-  if (status === "planned") return 1;
-  if (status === "unstarted") return 0;
-  return -1;
+function progressSortValue(item: LibraryItemMinified, _selectedStatus?: BookProgressStatus) {
+  return item.userMediaProgress?.isFinished ? 1 : item.userMediaProgress?.progress ?? 0;
 }
 
 export function getSeriesNext(items: LibraryItemMinified[], current: LibraryItemMinified | null) {

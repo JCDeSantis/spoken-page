@@ -9,6 +9,8 @@ Spoken Page is a responsive, subtitle-first web player for [Audiobookshelf](http
 
 ## What v1.2 adds
 
+The current development workspace also includes Phases 0–2 for review: complete-library search and Audiobookshelf-derived listening status with a separate Want to listen preference. See [the review report](docs/PHASE_0_2_REPORT.md) for validation, limitations and review steps. Offline downloads and player visuals remain planned work.
+
 - A responsive cover gallery with a black and dark red theme
 - Compact Pinned books that sync with your account and carry forward existing saved books
 - Continue listening with progress, remaining time, Resume, and Mark complete
@@ -21,11 +23,11 @@ See [PATCH_NOTES.md](PATCH_NOTES.md) for the complete release notes, including e
 ### Library
 
 - Browse every audiobook library available to your Audiobookshelf account
-- Search and filter by author, narrator, genre, series, and manual reading status
+- Search the complete selected library and filter by author, narrator, genre, series and listening status
 - Sort books and keep frequently used titles in a synced Pinned books section
 - Resume the most recently updated unfinished book or mark it complete in Audiobookshelf
 - Open a book without changing its listening history; a title becomes recent only after playback starts
-- Set a book to Planned, In Progress, or Completed—or leave its status blank
+- See Not started, In progress or Completed from Audiobookshelf; save Want to listen independently
 - Expand long synopses directly in the book details modal
 - Queue the next book in a series
 

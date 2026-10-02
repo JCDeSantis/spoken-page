@@ -12,5 +12,5 @@ export default async function FocusPlayerPage({ params }: FocusPlayerPageProps) 
   const connection = await getConnection();
   const profile = connection ? await authorize(connection) : null;
 
-  return <FocusPlayerShell itemId={itemId} preferenceScope={profile?.userId ?? "signed-out"} />;
+  return <FocusPlayerShell itemId={itemId} preferenceScope={profile?.preferenceScope ?? profile?.userId ?? "signed-out"} />;
 }

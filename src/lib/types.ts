@@ -92,7 +92,7 @@ export type LibraryItemMinified = {
     numAudioFiles?: number;
     numChapters?: number;
   };
-  userMediaProgress?: MediaProgress;
+  userMediaProgress?: MediaProgress | null;
 };
 
 export type LibraryItemExpanded = LibraryItemMinified & {
@@ -115,6 +115,7 @@ export type PlaybackSession = {
 };
 
 export type AuthorizedSummary = {
+  preferenceScope?: string;
   userId: string;
   username: string;
   userType: string;

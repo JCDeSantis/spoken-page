@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getConnection } from "@/lib/audiobookshelf";
+import { mergeLibraryPreferences, migrateLibraryPreferences } from "./library-preferences";
 
 type SettingsDocument = {
   version: 1;
@@ -56,11 +57,18 @@ async function readDocument(filePath: string): Promise<SettingsDocument> {
 
 export async function getUserSettings(namespace: string) {
   validateNamespace(namespace);
-  const document = await readDocument(await settingsPath());
+  const filePath = await settingsPath();
+  const document = await readDocument(filePath);
+  if (namespace === "library" && (document.namespaces.library as { schemaVersion?: number } | undefined)?.schemaVersion !== 2) {
+    // Re-read inside the write queue: concurrent initial reads must not replace newer edits.
+    await setUserSettings(namespace, null, true);
+    const migrated = await readDocument(filePath);
+    return { value: migrated.namespaces.library, updatedAt: migrated.updatedAt };
+  }
   return { value: document.namespaces[namespace] ?? null, updatedAt: document.updatedAt };
 }
 
-export async function setUserSettings(namespace: string, value: unknown) {
+export async function setUserSettings(namespace: string, value: unknown, migrationOnly = false) {
   validateNamespace(namespace);
   const serializedValue = JSON.stringify(value);
   if (Buffer.byteLength(serializedValue, "utf8") > MAX_NAMESPACE_BYTES) {
@@ -70,6 +78,19 @@ export async function setUserSettings(namespace: string, value: unknown) {
   const operation = writeQueue.then(async () => {
     const filePath = await settingsPath();
     const document = await readDocument(filePath);
+    if (migrationOnly) {
+      if ((document.namespaces.library as { schemaVersion?: number } | undefined)?.schemaVersion === 2) return { updatedAt: document.updatedAt };
+      value = migrateLibraryPreferences(document.namespaces.library);
+    }
+    if (namespace === "library") {
+      if ((document.namespaces.library as { schemaVersion?: number } | undefined)?.schemaVersion !== 2) {
+        await mkdir(path.dirname(filePath), { recursive: true });
+        try { await writeFile(`${filePath}.pre-status-v2.bak`, JSON.stringify(document), { flag: "wx", mode: 0o600 }); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      }
+      value = mergeLibraryPreferences(document.namespaces.library, value);
+      if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_NAMESPACE_BYTES) throw new Error("Settings payload is too large.");
+    }
     document.namespaces[namespace] = value;
     document.updatedAt = Date.now();
     await mkdir(path.dirname(filePath), { recursive: true });

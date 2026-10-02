@@ -1,8 +1,10 @@
 "use client";
 
+import { listeningState, LISTENING_LABELS, type ProgressAction } from "@/lib/listening-status";
+import type { LegacyStatus } from "@/lib/library-preferences";
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
 import { LibraryItemExpanded, LibraryItemMinified } from "@/lib/types";
-import { BookProgressStatus, formatDuration, seriesDisplay } from "./library-utils";
+import { formatDuration, seriesDisplay } from "./library-utils";
 
 type Props = {
   item: LibraryItemExpanded | null;
@@ -15,8 +17,13 @@ type Props = {
   onAddToQueue: (item: LibraryItemMinified) => void;
   onRemoveFromQueue: (id: string) => void;
   onSelectQueued: (id: string) => void;
-  status: BookProgressStatus | null;
-  onStatusChange: (status: BookProgressStatus | null) => void;
+  wantToListen: boolean;
+  onToggleWant: () => void;
+  onProgressAction: (action: ProgressAction) => void;
+  progressBusy: boolean;
+  progressError: string | null;
+  legacyStatus?: LegacyStatus;
+  onDismissLegacy: () => void;
 };
 
 function descriptionToText(source: string) {
@@ -109,11 +116,12 @@ function BookSynopsis({ description }: { description: string }) {
   );
 }
 
-export function BookDetails({ item, loading, error, nextInSeries, queue, onResume, onSelectSeries, onAddToQueue, onRemoveFromQueue, onSelectQueued, status, onStatusChange }: Props) {
+export function BookDetails({ item, loading, error, nextInSeries, queue, onResume, onSelectSeries, onAddToQueue, onRemoveFromQueue, onSelectQueued, wantToListen, onToggleWant, onProgressAction, progressBusy, progressError, legacyStatus, onDismissLegacy }: Props) {
   if (loading) return <aside className="book-details-card" aria-live="polite">Loading book details…</aside>;
   if (error) return <aside className="book-details-card status-error" role="alert">{error}</aside>;
   if (!item) return null;
   const progress = item.userMediaProgress;
+  const status = listeningState(progress);
   const remaining = Math.max(0, item.media.duration - (progress?.currentTime ?? 0));
   const series = seriesDisplay(item.media.metadata.seriesName);
   return (
@@ -133,24 +141,20 @@ export function BookDetails({ item, loading, error, nextInSeries, queue, onResum
           <span>{item.media.chapters?.length ?? item.media.numChapters ?? 0} chapters</span>
           {item.media.metadata.publishedYear ? <span>{item.media.metadata.publishedYear}</span> : null}
         </div>
-        <label className="book-status-control">
-          <span>Reading status</span>
-          <select
-            aria-label="Reading status"
-            onChange={(event) => onStatusChange(event.target.value ? event.target.value as BookProgressStatus : null)}
-            value={status ?? ""}
-          >
-            <option value="">No status</option>
-            <option value="planned">Planned</option>
-            <option value="unstarted">Not started</option>
-            <option value="in-progress">In progress</option>
-            <option value="finished">Completed</option>
-          </select>
-          <small>Status is optional and saved to your Spoken Page account.</small>
-        </label>
+        <section className="book-status-control" aria-label="Listening status">
+          <strong>{LISTENING_LABELS[status]}</strong>
+          <small>Listening progress is shared with Audiobookshelf.</small>
+          <div className="book-progress-actions">
+            <button className="button book-action-secondary want-listen-button" aria-pressed={wantToListen} onClick={onToggleWant} type="button">Want to listen</button>
+            <button className="button book-action-secondary" disabled={progressBusy} onClick={() => onProgressAction(status === "finished" ? "unfinished" : "complete")} type="button">{progressBusy ? "Saving…" : status === "finished" ? "Mark unfinished" : "Mark complete"}</button>
+            {status === "in-progress" ? <button className="button book-action-secondary" disabled={progressBusy} onClick={() => onProgressAction("restart")} type="button">Start over</button> : null}
+          </div>
+          {legacyStatus && legacyStatus !== "planned" && legacyStatus !== status ? <div className="status-message">Your previous manual label was {LISTENING_LABELS[legacyStatus]}. We kept it for reference; the status above reflects your listening progress. Use the actions above to change it. <button className="button button-quiet" onClick={onDismissLegacy} type="button">Dismiss</button></div> : null}
+          {progressError ? <p role="alert" className="status-error">{progressError}</p> : null}
+        </section>
         {item.media.metadata.description ? <BookSynopsis description={item.media.metadata.description} /> : null}
         <div className="book-details-actions">
-          <button className="button book-action-primary" onClick={onResume} type="button">{(progress?.currentTime ?? 0) > 0 ? "Resume" : "Play"}</button>
+          <button className="button book-action-primary" disabled={progressBusy} onClick={() => { if (status === "finished") onProgressAction("restart"); else onResume(); }} type="button">{status === "finished" ? "Start over" : (progress?.currentTime ?? 0) > 0 ? "Resume" : "Play"}</button>
           {nextInSeries ? <button className="button book-action-secondary" onClick={() => onAddToQueue(nextInSeries)} type="button">Queue next in series</button> : null}
         </div>
         {nextInSeries ? <p className="up-next-note"><strong>Up next:</strong> {nextInSeries.media.metadata.title}. Playback will not start automatically.</p> : null}

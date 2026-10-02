@@ -1,0 +1,44 @@
+{
+  "server": "audiobook.bananapizza.org",
+  "checkedAt": "2026-10-02T00:08:32.534Z",
+  "authenticated": true,
+  "progressSnapshot": true,
+  "audiobookLibraries": 1,
+  "downloadPermission": true,
+  "version": "2.36.1",
+  "pagination": {
+    "total": 117,
+    "returned": 100,
+    "page": 0,
+    "limit": 100
+  },
+  "lastPage": {
+    "returned": 17,
+    "matchingTotal": true
+  },
+  "search": {
+    "resultKeys": [
+      "book",
+      "narrators",
+      "tags",
+      "genres",
+      "series",
+      "authors"
+    ],
+    "hasTotal": false,
+    "returnedBooks": 1
+  },
+  "trackMetadata": {
+    "tracks": 1,
+    "chapters": 107,
+    "files": 2,
+    "progressLoaded": true
+  },
+  "audioRange": {
+    "status": 206,
+    "contentRange": "bytes 0-0/1169400536",
+    "hasValidator": true,
+    "mime": "audio/mp4"
+  },
+  "sessionImport": "Not invoked: mutates listening history. Replay semantics remain a required gate for the offline phase."
+}

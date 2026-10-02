@@ -9,6 +9,8 @@ import {
   PlaybackSession,
   SubtitleCue,
 } from "@/lib/types";
+import { playbackFinished } from "@/lib/listening-status";
+import { publishProgress } from "@/lib/progress-client";
 import { parseSubtitle } from "@/lib/srt";
 import { formatSleepTimer, useSleepTimer, type SleepTimerSelection } from "@/components/use-sleep-timer";
 
@@ -423,6 +425,7 @@ export function PlayerPanel({
   const previousItemRef = useRef<LibraryItemExpanded | null>(null);
   const sessionRef = useRef<PlaybackSession | null>(null);
   const currentTimeRef = useRef(0);
+  const completionReachedRef = useRef(false);
   const totalDurationRef = useRef(0);
   const tracksRef = useRef<AudioTrack[]>([]);
   const isPlayingRef = useRef(false);
@@ -1108,7 +1111,7 @@ export function PlayerPanel({
       const now = Date.now();
       const nextTime = clampTime(currentTimeRef.current, duration);
       const timeListened = snapshotListeningSeconds();
-      const isFinished = nextTime >= Math.max(duration - 5, duration * 0.995);
+      const isFinished = playbackFinished(nextTime, duration, completionReachedRef.current, Boolean(targetItem.userMediaProgress?.isFinished));
 
       if (!options?.silent) {
         setBusyAction("syncing");
@@ -1132,7 +1135,7 @@ export function PlayerPanel({
             duration,
             progress: {
               itemId: targetItem.id,
-              progress: duration > 0 ? nextTime / duration : 0,
+              progress: isFinished ? 1 : duration > 0 ? nextTime / duration : 0,
               isFinished,
               finishedAt: isFinished ? now : null,
               startedAt: targetItem.userMediaProgress?.startedAt ?? targetSession?.startedAt ?? now,
@@ -1158,6 +1161,7 @@ export function PlayerPanel({
 
         resetListeningClock();
         lastSyncedTimeRef.current = nextTime;
+        publishProgress(targetItem.id, { duration, currentTime: nextTime, progress: isFinished ? 1 : nextTime / duration, isFinished, startedAt: targetItem.userMediaProgress?.startedAt || targetSession.startedAt || now, finishedAt: isFinished ? now : null, lastUpdate: now });
 
         if (mode === "close") {
           setSession(null);
@@ -1357,6 +1361,7 @@ export function PlayerPanel({
     currentTimeRef.current = initialTime;
     lastSyncedTimeRef.current = initialTime;
     setCurrentTime(initialTime);
+    completionReachedRef.current = false;
 
     setSubtitleCues([]);
     setSubtitleError(null);
@@ -1693,19 +1698,25 @@ export function PlayerPanel({
       return;
     }
 
-    updatePlayhead(track.startOffset + audio.currentTime);
+    const nextTime = track.startOffset + audio.currentTime;
+    if (!audio.paused && !audio.seeking && playbackFinished(nextTime, totalDurationRef.current, true)) completionReachedRef.current = true;
+    updatePlayhead(nextTime);
   }
 
   function handlePlay() {
+    const current = itemRef.current;
+    if (current) publishProgress(current.id, { ...current.userMediaProgress, duration: totalDurationRef.current, currentTime: currentTimeRef.current, progress: currentTimeRef.current / Math.max(totalDurationRef.current, 1), isFinished: Boolean(current.userMediaProgress?.isFinished), startedAt: current.userMediaProgress?.startedAt || Date.now(), lastUpdate: Date.now() });
     setIsPlaying(true);
     resumeListeningClock();
     void requestWakeLock();
+    void syncToAudiobookshelf("sync", { silent: true });
   }
 
   function handlePause() {
     setIsPlaying(false);
     pauseListeningClock();
     void releaseWakeLock();
+    void syncToAudiobookshelf("sync", { silent: true });
   }
 
   function handleEnded() {
@@ -1717,6 +1728,7 @@ export function PlayerPanel({
       return;
     }
 
+    completionReachedRef.current = true;
     updatePlayhead(totalDurationRef.current);
     setIsPlaying(false);
     pauseListeningClock();

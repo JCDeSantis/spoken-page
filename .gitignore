@@ -14,3 +14,10 @@ pnpm-debug.log*
 .env.production
 
 certificates
+.test-data/
+.next-review/
+.next-build-check/
+
+# Local UI review captures; retain the isolated fixture illustration.
+docs/*.png
+!docs/phase-0-2-review.png

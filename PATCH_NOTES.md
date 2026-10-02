@@ -1,5 +1,14 @@
 # Spoken Page patch notes
 
+## Unreleased — Phases 0–2 review
+
+- Search the complete authorized library before filtering, sorting and pagination; show matching totals, preparation and refresh controls.
+- Derive listening status from Audiobookshelf and keep Want to listen separate. Add completion, unfinished and confirmed reset controls with shared updates across library surfaces.
+- Back up and migrate existing preferences while retaining pins, recent books, queues and previous manual labels for review.
+- Validate read-only compatibility with Audiobookshelf 2.36.1 and define contracts for future offline work. Downloads and player design changes are not included in this checkpoint.
+
+See [review and verification notes](docs/PHASE_0_2_REPORT.md).
+
 ## v1.2.1 — September 24, 2026
 
 - Updated Next.js, vulnerable transitive dependencies, and the test runner; refreshed Alpine packages and removed unused npm tooling from the runtime image.
