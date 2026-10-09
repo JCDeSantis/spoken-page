@@ -1134,7 +1134,6 @@ export function Dashboard({ initialLibraries, initialProfile }: DashboardProps) 
           {hideCompleted ? <div className="all-books-active-filters"><button className="filter-chip-pill" onClick={() => setHideCompleted(false)} type="button"><span>Hide completed</span><span aria-hidden="true">×</span></button></div> : null}
           {progressFilter !== "all" ? <div className="all-books-active-filters"><button className="filter-chip-pill" onClick={() => setProgressFilter("all")} type="button"><span>Status: {progressFilter.replace("-", " ")}</span><span aria-hidden="true">×</span></button></div> : null}
 
-          {itemsState === "loading" ? <p role="status" className="status-message">{search.preparing ? `${search.preparing.verifying ? "Verifying" : "Preparing"} library search: ${search.preparing.processed} of ${search.preparing.total || "…"} books…` : items.length ? "Updating library results…" : "Preparing complete library search…"}</p> : null}
           {itemsError ? <p role="alert" className="status-message status-error">{itemsError} <button className="button button-secondary" onClick={() => search.refresh(true)} type="button">Try again</button></p> : null}
 
           <div className="book-tile-grid">

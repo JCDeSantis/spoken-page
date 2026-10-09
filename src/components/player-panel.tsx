@@ -1125,7 +1125,7 @@ export function PlayerPanel({
       if (!options?.silent) {
         setBusyAction("syncing");
         setPlayerError(null);
-        setPlayerStatus(mode === "close" ? "Saving progress..." : "Syncing to Audiobookshelf...");
+        setPlayerStatus(null);
       }
 
       if (isCurrent()) setProgressSaveNotice({ state: "saving", message: "Saving progress…", retryable: false });
@@ -1188,14 +1188,6 @@ export function PlayerPanel({
 
         if (options?.refreshItem) {
           try { await onItemRefresh(targetItem.id); } catch { /* A refresh failure is not a failed save. */ }
-        }
-
-        if (!options?.silent) {
-          setPlayerStatus(
-            mode === "close"
-              ? "Playback progress saved to Audiobookshelf."
-              : "Synced with Audiobookshelf.",
-          );
         }
 
         return true;
@@ -2530,16 +2522,17 @@ export function PlayerPanel({
     const shouldShowSubtitleMeta = shouldShowLyricsStage;
     const footerNotice = playerError ?? subtitleError ?? playerStatus ?? subtitleStatus;
     const footerNoticeIsError = Boolean(playerError || subtitleError);
+    const progressSaveError = progressSaveNotice?.state === "failed" ? progressSaveNotice : null;
 
-    if (!shouldShowSubtitleMeta && !footerNotice && !progressSaveNotice && !(isDock && onHide)) {
+    if (!shouldShowSubtitleMeta && !footerNotice && !progressSaveError && !(isDock && onHide)) {
       return null;
     }
 
     return (
       <section className="player-footer">
-        {progressSaveNotice ? <div className={`progress-save-feedback ${progressSaveNotice.state === "failed" ? "progress-save-feedback-failed" : ""}`} role="status" aria-live="polite">
-          <span>{progressSaveNotice.message}</span>
-          {progressSaveNotice.state === "failed" && progressSaveNotice.retryable ? <button className="button book-action-secondary button-compact" onClick={() => { const failed = failedCheckpointRef.current; if (failed) void syncToAudiobookshelf(failed.mode, { silent: true }); }} type="button">Retry now</button> : null}
+        {progressSaveError ? <div className="progress-save-feedback progress-save-feedback-failed" role="status" aria-live="polite">
+          <span>{progressSaveError.message}</span>
+          {progressSaveError.retryable ? <button className="button book-action-secondary button-compact" onClick={() => { const failed = failedCheckpointRef.current; if (failed) void syncToAudiobookshelf(failed.mode, { silent: true }); }} type="button">Retry now</button> : null}
         </div> : null}
         <div className={`player-footer-row ${shouldShowSubtitleMeta ? "" : "player-footer-row-end"}`.trim()}>
           {footerNotice || shouldShowSubtitleMeta ? (
