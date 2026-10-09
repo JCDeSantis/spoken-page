@@ -1,6 +1,6 @@
 # Spoken Page
 
-![Version](https://img.shields.io/badge/version-v1.4.0-ff5664?style=for-the-badge)
+[![Version](https://img.shields.io/badge/version-v1.4.0-ff5664?style=for-the-badge)](https://github.com/JCDeSantis/spoken-page/releases/tag/v1.4.0)
 ![License](https://img.shields.io/badge/license-MIT-163434?style=for-the-badge)
 
 ![Spoken Page logo](public/spoken-page-logo-trimmed.png)
@@ -38,13 +38,16 @@ See [PATCH_NOTES.md](PATCH_NOTES.md) for the complete release notes, including e
 
 ### Player
 
-- Show saving, saved and failed progress states; retry temporary failures while the player remains open, including when paused. Failed saves are not retained after closing the page.
+- Keep routine sync messages quiet; show progress-save failures and retry temporary failures while the player remains open, including when paused. Failed saves are not retained after closing the page.
 
 - Start and resume native Audiobookshelf playback sessions
 - Keep progress synchronized with Audiobookshelf across multi-track books
-- Navigate chapters or jump through the complete book timeline
-- Change playback speed and subtitle timing
-- Use a compact pop-up sleep timer designed for touch screens
+- Use matching library and fullscreen controls, with chapter markers, a chapter selection popup and a stable book timeline
+- Toggle the right-hand time display between remaining and total time; undo the latest seek or chapter jump
+- Change playback speed and volume, with a speaker button that mutes and restores the previous volume; saved volume applies before playback starts
+- Open the compact sleep menu by clicking its icon or timer
+- Choose the default, black, custom-color or cover-art fullscreen background; controls hide automatically during playback
+- Click the subtitle area to play/pause or double-click to enter/leave fullscreen
 - Open a focused player route or a separate player window
 - Use keyboard shortcuts and Media Session controls where the browser supports them
 
@@ -52,7 +55,8 @@ See [PATCH_NOTES.md](PATCH_NOTES.md) for the complete release notes, including e
 
 - Automatically find attached Audiobookshelf `.srt` and `.vtt` files
 - Upload a local subtitle file when the server has none
-- Display the active line in a subtitle-focused reading view
+- Display the current and previous lines without revealing upcoming subtitles; library subtitles use a black background
+- Choose a font, horizontal and vertical alignment, text size up to 120px, and fullscreen Fill screen sizing from Player options
 - Save subtitle source and timing offset separately for each book
 
 ### Accounts and sync
@@ -81,6 +85,8 @@ docker compose up -d
 5. Open `http://localhost:3000` and sign in with your Audiobookshelf account.
 
 The Compose configuration creates a persistent `spoken-page-data` volume for encrypted sessions and synced preferences.
+
+The versioned container for this release is `ghcr.io/jcdesantis/spoken-page:v1.4.0`; `latest` follows the newest build from `main`. See the [v1.4.0 release](https://github.com/JCDeSantis/spoken-page/releases/tag/v1.4.0) for the release notes.
 
 ### Choosing the Audiobookshelf URL
 
