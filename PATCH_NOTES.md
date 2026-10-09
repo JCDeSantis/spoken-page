@@ -1,5 +1,10 @@
 # Spoken Page patch notes
 
+## v1.4.1 — October 9, 2026
+
+- Keep fullscreen subtitles at the same position and font size when playback controls appear or hide, including Fill screen sizing and all vertical alignments.
+- Reserve a consistent reading area so player options and temporary status messages do not move or resize subtitles.
+
 ## v1.4.0 — October 9, 2026
 
 - Match library and fullscreen player controls, with volume, mute/restore, playback speed and a clickable sleep timer.

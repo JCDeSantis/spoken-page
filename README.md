@@ -1,6 +1,6 @@
 # Spoken Page
 
-[![Version](https://img.shields.io/badge/version-v1.4.0-ff5664?style=for-the-badge)](https://github.com/JCDeSantis/spoken-page/releases/tag/v1.4.0)
+[![Version](https://img.shields.io/badge/version-v1.4.1-ff5664?style=for-the-badge)](https://github.com/JCDeSantis/spoken-page/releases/tag/v1.4.1)
 ![License](https://img.shields.io/badge/license-MIT-163434?style=for-the-badge)
 
 ![Spoken Page logo](public/spoken-page-logo-trimmed.png)
@@ -10,6 +10,8 @@ Spoken Page is a responsive, subtitle-first web player for [Audiobookshelf](http
 ## What v1.4 adds
 
 Version 1.4 adds matching library and fullscreen player controls, customizable subtitle fonts and alignment, fullscreen backgrounds, larger text and a Fill screen option. Chapter markers, a chapter popup, seek undo, remembered volume and subtitle click shortcuts make playback easier to navigate. The Spoken Page logo now appears in browser tabs.
+
+Version 1.4.1 keeps fullscreen subtitles in the same position and at the same size when controls appear or hide, including Fill screen mode.
 
 The release also retains complete-library search, Audiobookshelf-derived listening status, Want to listen preferences, remembered library views and series handling from v1.3. See [the library upgrades review](docs/LIBRARY_UPGRADES_REVIEW.md) and [initial validation report](docs/PHASE_0_2_REPORT.md). Offline downloads remain outside this release.
 
@@ -86,7 +88,7 @@ docker compose up -d
 
 The Compose configuration creates a persistent `spoken-page-data` volume for encrypted sessions and synced preferences.
 
-The versioned container for this release is `ghcr.io/jcdesantis/spoken-page:v1.4.0`; `latest` follows the newest build from `main`. See the [v1.4.0 release](https://github.com/JCDeSantis/spoken-page/releases/tag/v1.4.0) for the release notes.
+The versioned container for this release is `ghcr.io/jcdesantis/spoken-page:v1.4.1`; `latest` follows the newest build from `main`. See the [v1.4.1 release](https://github.com/JCDeSantis/spoken-page/releases/tag/v1.4.1) for the release notes.
 
 ### Choosing the Audiobookshelf URL
 

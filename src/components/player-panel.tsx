@@ -528,9 +528,11 @@ export function PlayerPanel({
     let cancelled = false;
     const fit = () => {
       if (cancelled) return;
-      const optionsHeight = transport?.querySelector(".player-options-panel")?.getBoundingClientRect().height ?? 0;
-      const clearance = shouldShowFullscreenControls && transport
-        ? Math.min(card.clientHeight / 2, transport.offsetHeight - optionsHeight + 16)
+      const controls = transport?.querySelector(".player-control-row");
+      // Reserve the same reading area whether controls are visible or hidden.
+      // Options and temporary status messages must not move or resize subtitles.
+      const clearance = transport && controls
+        ? Math.min(card.clientHeight / 2, controls.getBoundingClientRect().bottom - transport.getBoundingClientRect().top + parseFloat(getComputedStyle(transport).paddingBottom) + 16)
         : 0;
       card.style.setProperty("--subtitle-controls-clearance", `${clearance}px`);
       if (!lines) return;
@@ -557,7 +559,7 @@ export function PlayerPanel({
     if (transport) observer.observe(transport);
     void document.fonts.ready.then(fit);
     return () => { cancelled = true; observer.disconnect(); };
-  }, [isFullscreen, shouldShowFullscreenControls, appearance, activeSubtitleText, previousSubtitleCue?.text, subtitleLineHeight, hasLoadedSubtitles, shouldShowLoadedSubtitlePrompt]);
+  }, [isFullscreen, appearance, activeSubtitleText, previousSubtitleCue?.text, subtitleLineHeight, hasLoadedSubtitles, shouldShowLoadedSubtitlePrompt]);
 
   useEffect(() => {
     itemRef.current = item;
