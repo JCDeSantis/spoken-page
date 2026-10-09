@@ -374,6 +374,8 @@ export function PlayerPanel({
   const subtitleCardRef = useRef<HTMLElement | null>(null);
   const subtitleLinesRef = useRef<HTMLDivElement | null>(null);
   const transportRef = useRef<HTMLElement | null>(null);
+  const volumeBeforeMuteRef = useRef(DEFAULT_PLAYER_PREFERENCES.volume);
+  const subtitleClickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const itemRef = useRef<LibraryItemExpanded | null>(item);
   const previousItemRef = useRef<LibraryItemExpanded | null>(null);
   const sessionRef = useRef<PlaybackSession | null>(null);
@@ -509,6 +511,14 @@ export function PlayerPanel({
       }) as CSSProperties,
     [subtitleLineHeight, subtitleScale, appearance],
   );
+
+  useEffect(() => {
+    if (volume > 0) volumeBeforeMuteRef.current = volume;
+  }, [volume]);
+
+  useEffect(() => () => {
+    if (subtitleClickTimeoutRef.current !== null) clearTimeout(subtitleClickTimeoutRef.current);
+  }, [item?.id]);
 
   useLayoutEffect(() => {
     const card = subtitleCardRef.current;
@@ -731,9 +741,6 @@ export function PlayerPanel({
 
   useEffect(() => {
     setIsChapterListOpen(false);
-  }, [item?.id]);
-
-  useEffect(() => {
   }, [item?.id]);
 
   useEffect(() => {
@@ -1008,6 +1015,10 @@ export function PlayerPanel({
 
   const safePlay = useEventCallback(async (audio: HTMLAudioElement) => {
     try {
+      // An audio element can mount after the saved preferences have loaded.
+      // Apply the current settings before every start, including track changes.
+      audio.volume = volume;
+      audio.playbackRate = playbackRate;
       await audio.play();
       setPlayerError(null);
       return true;
@@ -1539,7 +1550,7 @@ export function PlayerPanel({
     }
 
     audio.playbackRate = playbackRate;
-  }, [playbackRate]);
+  }, [playbackRate, item?.id]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -1549,7 +1560,7 @@ export function PlayerPanel({
     }
 
     audio.volume = volume;
-  }, [volume]);
+  }, [volume, item?.id]);
 
   useEffect(() => {
     if (!progressSaveNotice) return;
@@ -1837,7 +1848,19 @@ export function PlayerPanel({
   }
 
   function handleVolumeChange(nextValue: number) {
+    if (nextValue > 0) volumeBeforeMuteRef.current = nextValue;
     setVolume(nextValue);
+    revealFullscreenControls();
+  }
+
+  function toggleMute() {
+    setVolume(current => {
+      if (current > 0) {
+        volumeBeforeMuteRef.current = current;
+        return 0;
+      }
+      return volumeBeforeMuteRef.current || DEFAULT_PLAYER_PREFERENCES.volume;
+    });
     revealFullscreenControls();
   }
 
@@ -1856,22 +1879,30 @@ export function PlayerPanel({
     revealFullscreenControls(true);
   }
 
-  function handleFullscreenStageTap(event: MouseEvent<HTMLDivElement>) {
-    if (!isFullscreen) {
-      return;
-    }
-
+  function isSubtitleGesture(event: MouseEvent<HTMLElement>) {
     const target = event.target;
+    return target instanceof Element && !target.closest("button, a, input, select, textarea, summary, details, .transport-shell-fullscreen");
+  }
 
-    if (!(target instanceof Element)) {
-      return;
-    }
-
-    if (target.closest(".transport-shell-fullscreen")) {
-      return;
-    }
-
+  function handleSubtitleClick(event: MouseEvent<HTMLElement>) {
+    if (!isSubtitleGesture(event)) return;
+    event.stopPropagation();
+    if (subtitleClickTimeoutRef.current !== null) clearTimeout(subtitleClickTimeoutRef.current);
     revealFullscreenControls();
+    if (event.detail > 1) return;
+    subtitleClickTimeoutRef.current = setTimeout(() => {
+      subtitleClickTimeoutRef.current = null;
+      void handlePrimaryTransport();
+    }, 300);
+  }
+
+  function handleSubtitleDoubleClick(event: MouseEvent<HTMLElement>) {
+    if (!isSubtitleGesture(event)) return;
+    event.stopPropagation();
+    event.preventDefault();
+    if (subtitleClickTimeoutRef.current !== null) clearTimeout(subtitleClickTimeoutRef.current);
+    subtitleClickTimeoutRef.current = null;
+    void toggleFullscreen();
   }
 
   useEffect(() => {
@@ -1915,7 +1946,7 @@ export function PlayerPanel({
       } else if (event.key === "ArrowRight") {
         handleRelativeSeek(30);
       } else if (key === "m") {
-        setVolume((current) => (current > 0 ? 0 : 1));
+        toggleMute();
       } else if (key === "f") {
         void toggleFullscreen();
       } else if (event.key === "?") {
@@ -2017,7 +2048,7 @@ export function PlayerPanel({
   }
 
   function renderSubtitleStage() {
-    return <section className="subtitle-stage" style={subtitleStageStyle}>
+    return <section className="subtitle-stage" style={subtitleStageStyle} onClick={handleSubtitleClick} onDoubleClick={handleSubtitleDoubleClick}>
       <article ref={subtitleCardRef} className={`subtitle-card subtitle-card-contrast-${subtitleContrast} ${hasLoadedSubtitles ? "" : "subtitle-card-empty"}`}>
         {hasLoadedSubtitles && !shouldShowLoadedSubtitlePrompt ? <div ref={subtitleLinesRef} className="subtitle-lines">
           {appearance.showPreviousSubtitle ? <p className="subtitle-previous" aria-hidden="true">{previousSubtitleCue?.text || "\u00A0"}</p> : null}
@@ -2062,7 +2093,7 @@ export function PlayerPanel({
         <label className="player-option-row"><span>Auto-hide delay</span><select aria-label="Auto-hide delay" value={fullscreenAutoHideMs} onChange={event => handleFullscreenAutoHideChange(Number(event.target.value) as FullscreenAutoHide)}><option value={1500}>1.5s</option><option value={2500}>2.5s</option><option value={4000}>4s</option><option value={6000}>6s</option></select></label>
         <button className="player-text-action" type="button" disabled={busyAction === "starting"} onClick={() => void startPlayback(true)}>Restart playback</button>
       </details>
-      {isShortcutHelpOpen ? <section className="shortcut-help-panel" aria-label="Keyboard shortcuts"><p><kbd>Space</kbd>/<kbd>K</kbd> play or pause · <kbd>J</kbd>/<kbd>L</kbd> skip 10s</p><p><kbd>←</kbd>/<kbd>→</kbd> back 15s/forward 30s · <kbd>Shift</kbd> + arrows change chapter</p><p><kbd>M</kbd> mute · <kbd>F</kbd> full screen · <kbd>?</kbd> help</p></section> : null}
+      {isShortcutHelpOpen ? <section className="shortcut-help-panel" aria-label="Keyboard shortcuts"><p><kbd>Space</kbd>/<kbd>K</kbd> play or pause · <kbd>J</kbd>/<kbd>L</kbd> skip 10s</p><p><kbd>←</kbd>/<kbd>→</kbd> back 15s/forward 30s · <kbd>Shift</kbd> + arrows change chapter</p><p><kbd>M</kbd> mute · <kbd>F</kbd> full screen · <kbd>?</kbd> help</p><p>Click subtitles to play or pause · Double-click to enter or leave fullscreen</p></section> : null}
     </section>;
   }
 
@@ -2074,7 +2105,7 @@ export function PlayerPanel({
     }}>
       <div className="player-control-meta">
         <div className="player-control-book"><img alt="" src={`/api/items/${item?.id}/cover`} /><div><strong>{item?.media.metadata.title}</strong><p>{item?.media.metadata.authorName ?? "Unknown author"}{item?.media.metadata.narratorName ? ` · ${item.media.metadata.narratorName}` : ""}</p></div></div>
-        <div className="player-volume-fullscreen"><label className="player-main-volume"><span>Volume</span><input aria-label="Player volume" type="range" min={0} max={1} step={0.01} value={volume} onChange={event => handleVolumeChange(Number(event.target.value))} /><output>{volumePercent}%</output></label><button type="button" className="player-icon-control" aria-label={fullscreenLabel} title={fullscreenLabel} onClick={() => void toggleFullscreen()}><PlayerIcon name={isFullscreen ? "exit" : "fullscreen"} /></button></div>
+        <div className="player-volume-fullscreen"><div className="player-main-volume"><button type="button" className="player-mute-control" aria-label={volume > 0 ? "Mute audio" : "Restore audio volume"} aria-pressed={volume === 0} title={volume > 0 ? "Mute audio" : "Restore previous volume"} onClick={toggleMute}><PlayerIcon name={volume > 0 ? "speaker" : "muted"} /></button><label htmlFor={`player-volume-${item?.id}`}>Volume</label><input id={`player-volume-${item?.id}`} aria-label="Player volume" type="range" min={0} max={1} step={0.01} value={volume} onChange={event => handleVolumeChange(Number(event.target.value))} /><output>{volumePercent}%</output></div><button type="button" className="player-icon-control" aria-label={fullscreenLabel} title={fullscreenLabel} onClick={() => void toggleFullscreen()}><PlayerIcon name={isFullscreen ? "exit" : "fullscreen"} /></button></div>
       </div>
       <div className="player-timeline">
         <span className="player-time-label">{formatTime(currentTime)}</span>
@@ -2095,7 +2126,7 @@ export function PlayerPanel({
         </div>
         <div className="player-secondary-controls">
           <select className="player-speed-select" aria-label="Playback speed" value={playbackRate} onChange={event => handlePlaybackRateChange(Number(event.target.value))}>{[0.8, 1, 1.15, 1.25, 1.4, 1.5, 1.75, 2].map(speed => <option key={speed} value={speed}>{speed}×</option>)}</select>
-          <details className="sleep-timer-popover" onToggle={event => { if (event.currentTarget.open) revealFullscreenControls(true); else revealFullscreenControls(); }}><summary aria-label="Sleep timer"><PlayerIcon name="moon" /><output>{sleepTimer.selection === "off" ? "Off" : formatSleepTimer(sleepTimer.remainingSeconds)}</output></summary><div className="sleep-timer-panel" aria-label="Sleep timer choices"><div className="sleep-timer-options">{([["off", "Off"], [15, "15m"], [30, "30m"], [45, "45m"], [60, "60m"], ["chapter", "Chapter"]] as Array<[SleepTimerSelection, string]>).map(([value, label]) => <button key={String(value)} type="button" disabled={value === "chapter" && !activeChapter} aria-pressed={sleepTimer.selection === value} className={`sleep-timer-option ${sleepTimer.selection === value ? "sleep-timer-option-active" : ""}`} onClick={event => { sleepTimer.setSelection(value); event.currentTarget.closest("details")?.removeAttribute("open"); }}>{label}</button>)}</div></div></details>
+          <details className="sleep-timer-popover" onToggle={event => { if (event.currentTarget.open) revealFullscreenControls(true); else revealFullscreenControls(); }}><summary aria-label="Sleep timer" onClick={event => { event.preventDefault(); const details = event.currentTarget.parentElement as HTMLDetailsElement; details.open = !details.open; }}><PlayerIcon name="moon" /><output>{sleepTimer.selection === "off" ? "Off" : formatSleepTimer(sleepTimer.remainingSeconds)}</output></summary><div className="sleep-timer-panel" aria-label="Sleep timer choices"><div className="sleep-timer-options">{([["off", "Off"], [15, "15m"], [30, "30m"], [45, "45m"], [60, "60m"], ["chapter", "Chapter"]] as Array<[SleepTimerSelection, string]>).map(([value, label]) => <button key={String(value)} type="button" disabled={value === "chapter" && !activeChapter} aria-pressed={sleepTimer.selection === value} className={`sleep-timer-option ${sleepTimer.selection === value ? "sleep-timer-option-active" : ""}`} onClick={event => { sleepTimer.setSelection(value); event.currentTarget.closest("details")?.removeAttribute("open"); }}>{label}</button>)}</div></div></details>
           <button className="player-icon-control" type="button" aria-label={undoTime === null ? "Undo last jump" : `Undo jump to return to ${formatTime(undoTime)}`} title={undoTime === null ? "Undo last jump" : `Return to ${formatTime(undoTime)}`} disabled={undoTime === null} onClick={undoLastJump}><PlayerIcon name="undo" /></button>
           <button className="player-icon-control" type="button" aria-label="Player options" aria-expanded={isOptionsOpen} onClick={() => { setIsOptionsOpen(current => !current); revealFullscreenControls(true); }}><PlayerIcon name="options" /></button>
         </div>
@@ -2243,7 +2274,7 @@ export function PlayerPanel({
       ) : null}
 
       {isFullscreen ? (
-        <div className="player-panel-fullscreen-stage" onClick={handleFullscreenStageTap}>
+        <div className="player-panel-fullscreen-stage" onClick={handleSubtitleClick} onDoubleClick={handleSubtitleDoubleClick}>
           {renderSubtitleStage()}
 
           <div

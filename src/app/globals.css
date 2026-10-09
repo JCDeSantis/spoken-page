@@ -3112,6 +3112,10 @@ img {
 .player-main-volume { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #baaab0; }
 .player-main-volume input { width: 110px; margin: 0; accent-color: var(--signal); }
 .player-main-volume output { width: 4ch; font-size: 11px; font-variant-numeric: tabular-nums; }
+.player-mute-control { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 36px; padding: 4px; border: 0; border-radius: 6px; background: none; color: #baaab0; cursor: pointer; }
+.player-mute-control:hover { background: #302027; color: #f4eeee; }
+.player-panel .subtitle-stage, .reading-focus-transport .sleep-timer-popover > summary { user-select: none; -webkit-user-select: none; }
+.player-panel .subtitle-stage { cursor: pointer; }
 .player-icon-control, .player-play-control, .player-chapter-trigger, .player-time-toggle, .player-text-action {
   appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0;
   font: inherit; color: #f4eeee; background: none; cursor: pointer; border-radius: 7px;

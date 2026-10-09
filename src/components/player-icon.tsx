@@ -16,6 +16,8 @@ const paths = {
   left: "M12 5l-5 5 5 5",
   right: "M8 5l5 5-5 5",
   moon: "M16 12a7 7 0 0 1-8-9A7 7 0 1 0 16 12Z",
+  speaker: "M3 7h4l4-4v14l-4-4H3ZM14 6a6 6 0 0 1 0 8M16 3a10 10 0 0 1 0 14",
+  muted: "M3 7h4l4-4v14l-4-4H3ZM14 7l4 6M18 7l-4 6",
 } as const;
 
 export function PlayerIcon({ name }: { name: keyof typeof paths }) {
