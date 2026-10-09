@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import { ChangeEvent, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import {
   AudioTrack,
   Chapter,
@@ -12,7 +12,9 @@ import {
 import { playbackFinished } from "@/lib/listening-status";
 import { progressSaveFailure, progressRetryDelay } from "@/lib/progress-save-feedback";
 import { publishProgress } from "@/lib/progress-client";
+import { PlayerIcon } from "@/components/player-icon";
 import { parseSubtitle } from "@/lib/srt";
+import { chapterMarkers, normalizePlayerAppearance, previousSubtitle, SeekUndoHistory, SUBTITLE_FONTS, useDarkSubtitleText, type PlayerAppearance } from "@/lib/player-display";
 import { formatSleepTimer, useSleepTimer, type SleepTimerSelection } from "@/components/use-sleep-timer";
 
 type PlayerPanelProps = {
@@ -74,7 +76,7 @@ type SubtitlePosition = "center" | "raised" | "lower-third";
 type SubtitleContrast = "solid" | "soft" | "glow";
 type FullscreenAutoHide = 1500 | 2500 | 4000 | 6000;
 
-type PlayerPreferences = {
+type PlayerPreferences = PlayerAppearance & {
   playbackRate: number;
   volume: number;
   subtitleScale: SubtitleScale;
@@ -132,6 +134,7 @@ function readAllBookSubtitlePreferences(scope: string) {
 }
 
 const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
+  ...normalizePlayerAppearance(),
   playbackRate: 1,
   volume: 1,
   subtitleScale: "large",
@@ -293,6 +296,7 @@ function parseStoredPreferences(rawValue: string | null): PlayerPreferences {
     const parsed = JSON.parse(rawValue) as Partial<PlayerPreferences>;
 
     return {
+      ...normalizePlayerAppearance(parsed),
       playbackRate: normalizePlaybackRate(Number(parsed.playbackRate)),
       volume: clampVolume(Number(parsed.volume)),
       subtitleScale:
@@ -322,47 +326,6 @@ function parseStoredPreferences(rawValue: string | null): PlayerPreferences {
   }
 }
 
-function balanceSubtitleText(text: string) {
-  const trimmed = text.trim();
-
-  if (!trimmed || trimmed.includes("\n")) {
-    return trimmed;
-  }
-
-  const words = trimmed.split(/\s+/).filter(Boolean);
-
-  if (words.length < 7 || trimmed.length < 42) {
-    return trimmed;
-  }
-
-  const totalCharacters = words.reduce((sum, word) => sum + word.length, 0);
-  const target = totalCharacters / 2;
-  let bestIndex = -1;
-  let running = 0;
-  let bestDifference = Number.POSITIVE_INFINITY;
-
-  for (let index = 0; index < words.length - 1; index += 1) {
-    running += words[index].length;
-    const difference = Math.abs(target - running);
-
-    if (difference < bestDifference) {
-      bestDifference = difference;
-      bestIndex = index;
-    }
-
-    running += 1;
-  }
-
-  if (bestIndex <= 0) {
-    return trimmed;
-  }
-
-  const firstLine = words.slice(0, bestIndex + 1).join(" ");
-  const secondLine = words.slice(bestIndex + 1).join(" ");
-
-  return secondLine ? `${firstLine}\n${secondLine}` : trimmed;
-}
-
 function formatTime(totalSeconds: number) {
   if (!Number.isFinite(totalSeconds)) {
     return "0:00";
@@ -378,20 +341,6 @@ function formatTime(totalSeconds: number) {
   }
 
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function formatChapterLabel(title: string | undefined) {
-  if (!title) {
-    return null;
-  }
-
-  const match = title.match(/(\d+)/);
-
-  if (!match) {
-    return title.trim() || null;
-  }
-
-  return `Chapter ${Number(match[1])}`;
 }
 
 function getChapterTitle(chapter: Chapter, index: number) {
@@ -422,6 +371,9 @@ export function PlayerPanel({
   const panelRef = useRef<HTMLElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const subtitleUploadRef = useRef<HTMLInputElement | null>(null);
+  const subtitleCardRef = useRef<HTMLElement | null>(null);
+  const subtitleLinesRef = useRef<HTMLDivElement | null>(null);
+  const transportRef = useRef<HTMLElement | null>(null);
   const itemRef = useRef<LibraryItemExpanded | null>(item);
   const previousItemRef = useRef<LibraryItemExpanded | null>(null);
   const sessionRef = useRef<PlaybackSession | null>(null);
@@ -449,6 +401,8 @@ export function PlayerPanel({
   const fullscreenControlsTimeoutRef = useRef<number | null>(null);
   const playerPreferencesDirtyRef = useRef(false);
   const subtitlePreferencesDirtyRef = useRef(false);
+  const seekHistoryRef = useRef(new SeekUndoHistory());
+  const chapterDialogRef = useRef<HTMLDialogElement | null>(null);
 
   const [session, setSession] = useState<PlaybackSession | null>(null);
   const [trackLoadRequest, setTrackLoadRequest] = useState<TrackLoadRequest | null>(null);
@@ -456,7 +410,10 @@ export function PlayerPanel({
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(DEFAULT_PLAYER_PREFERENCES.playbackRate);
   const [volume, setVolume] = useState(DEFAULT_PLAYER_PREFERENCES.volume);
-  const [timeDisplayMode, setTimeDisplayMode] = useState<"elapsed" | "remaining">("elapsed");
+  const [timeDisplayMode, setTimeDisplayMode] = useState<"total" | "remaining">("remaining");
+  const [undoTime, setUndoTime] = useState<number | null>(null);
+  const [chapterPage, setChapterPage] = useState(0);
+  const [appearance, setAppearance] = useState<PlayerAppearance>(() => normalizePlayerAppearance());
   const [busyAction, setBusyAction] = useState<"starting" | "syncing" | "refreshing" | null>(null);
   const [playerStatus, setPlayerStatus] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
@@ -474,7 +431,6 @@ export function PlayerPanel({
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
   const [isChapterListOpen, setIsChapterListOpen] = useState(false);
   const [isFullscreenControlsVisible, setIsFullscreenControlsVisible] = useState(true);
-  const [isSubtitleDisplayOptionsOpen, setIsSubtitleDisplayOptionsOpen] = useState(false);
   const [isShortcutHelpOpen, setIsShortcutHelpOpen] = useState(false);
   const [subtitleScale, setSubtitleScale] = useState<SubtitleScale>(DEFAULT_PLAYER_PREFERENCES.subtitleScale);
   const [subtitleLineHeight, setSubtitleLineHeight] = useState<SubtitleLineHeight>(
@@ -515,9 +471,11 @@ export function PlayerPanel({
     [currentTime, subtitleCues, subtitleOffset],
   );
   const activeSubtitleText = useMemo(
-    () => balanceSubtitleText(activeSubtitle?.text ?? ""),
+    () => activeSubtitle?.text.trim() ?? "",
     [activeSubtitle?.text],
   );
+  const previousSubtitleCue = useMemo(() => previousSubtitle(subtitleCues, currentTime + subtitleOffset, activeSubtitle), [subtitleCues, currentTime, subtitleOffset, activeSubtitle]);
+  const timelineMarkers = useMemo(() => chapterMarkers(chapters, totalDuration), [chapters, totalDuration]);
   const activeChapterIndex = useMemo(
     () => getChapterIndexAtTime(chapters, currentTime),
     [chapters, currentTime],
@@ -527,7 +485,7 @@ export function PlayerPanel({
   const hasActiveSession = Boolean(session?.id);
   const hasLoadedSubtitles = subtitleCues.length > 0;
   const isFullscreen = isBrowserFullscreen || isInlineFullscreen;
-  const shouldShowLyricsStage = !isDock || focusMode || isFullscreen || hasPlaybackStarted;
+  const shouldShowLyricsStage = true;
   const shouldShowLoadedSubtitlePrompt = hasLoadedSubtitles && !hasPlaybackStarted;
   const shouldKeepScreenAwake = isPlaying;
   const shouldShowFullscreenControls =
@@ -535,10 +493,7 @@ export function PlayerPanel({
     isFullscreenControlsVisible ||
     !isPlaying ||
     isChapterListOpen ||
-    isSubtitleDisplayOptionsOpen;
-  const chapterLabel = useMemo(() => formatChapterLabel(activeChapter?.title), [activeChapter?.title]);
-  const hasPreviousChapter = activeChapterIndex > 0;
-  const hasNextChapter = activeChapterIndex >= 0 && activeChapterIndex < chapters.length - 1;
+    isOptionsOpen || isShortcutHelpOpen;
   const subtitleStageStyle = useMemo(
     () =>
       ({
@@ -546,9 +501,53 @@ export function PlayerPanel({
           subtitleScale === "standard" ? "1" : subtitleScale === "large" ? "1.18" : "1.34",
         "--subtitle-line-height":
           subtitleLineHeight === "tight" ? "1.18" : subtitleLineHeight === "standard" ? "1.28" : "1.42",
+        "--subtitle-font-family": SUBTITLE_FONTS[appearance.subtitleFont],
+        "--subtitle-size": `${appearance.subtitleSize}px`,
+        "--subtitle-dock-size": `${Math.round(appearance.subtitleSize * 18 / 34)}px`,
+        "--subtitle-align": appearance.subtitleAlignment,
+        "--subtitle-vertical": appearance.subtitleVerticalAlignment === "top" ? "flex-start" : appearance.subtitleVerticalAlignment === "bottom" ? "flex-end" : "center",
       }) as CSSProperties,
-    [subtitleLineHeight, subtitleScale],
+    [subtitleLineHeight, subtitleScale, appearance],
   );
+
+  useLayoutEffect(() => {
+    const card = subtitleCardRef.current;
+    const lines = subtitleLinesRef.current;
+    const transport = transportRef.current;
+    if (!card || !isFullscreen) return;
+    let cancelled = false;
+    const fit = () => {
+      if (cancelled) return;
+      const optionsHeight = transport?.querySelector(".player-options-panel")?.getBoundingClientRect().height ?? 0;
+      const clearance = shouldShowFullscreenControls && transport
+        ? Math.min(card.clientHeight / 2, transport.offsetHeight - optionsHeight + 16)
+        : 0;
+      card.style.setProperty("--subtitle-controls-clearance", `${clearance}px`);
+      if (!lines) return;
+      lines.style.removeProperty("--fitted-subtitle-size");
+      if (appearance.subtitleSizeMode !== "fill") return;
+      const style = getComputedStyle(card);
+      const height = card.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      const width = lines.clientWidth;
+      if (height <= 0 || width <= 0) return;
+      // Measure the actual chosen font and both visible lines, including wrapping.
+      let low = 8;
+      let high = Math.max(height, width);
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const size = (low + high) / 2;
+        lines.style.setProperty("--fitted-subtitle-size", `${size}px`);
+        if (lines.scrollHeight <= height && lines.scrollWidth <= width) low = size;
+        else high = size;
+      }
+      lines.style.setProperty("--fitted-subtitle-size", `${Math.floor(low)}px`);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(card);
+    if (transport) observer.observe(transport);
+    void document.fonts.ready.then(fit);
+    return () => { cancelled = true; observer.disconnect(); };
+  }, [isFullscreen, shouldShowFullscreenControls, appearance, activeSubtitleText, previousSubtitleCue?.text, subtitleLineHeight, hasLoadedSubtitles, shouldShowLoadedSubtitlePrompt]);
 
   useEffect(() => {
     itemRef.current = item;
@@ -580,7 +579,7 @@ export function PlayerPanel({
 
   useEffect(() => {
     const savedMode = window.localStorage.getItem(scopedPlayerStorageKey(TIME_DISPLAY_MODE_STORAGE_KEY, preferenceScope));
-    setTimeDisplayMode(savedMode === "remaining" ? "remaining" : "elapsed");
+    setTimeDisplayMode(savedMode === "total" ? "total" : "remaining");
   }, [preferenceScope]);
 
   useEffect(() => {
@@ -590,6 +589,7 @@ export function PlayerPanel({
     );
 
     setPlaybackRate(storedPreferences.playbackRate);
+    setAppearance(normalizePlayerAppearance(storedPreferences));
     setVolume(storedPreferences.volume);
     setSubtitleScale(storedPreferences.subtitleScale);
     setSubtitleLineHeight(storedPreferences.subtitleLineHeight);
@@ -604,6 +604,7 @@ export function PlayerPanel({
           if (payload.value) {
             const serverPreferences = parseStoredPreferences(JSON.stringify(payload.value));
             setPlaybackRate(serverPreferences.playbackRate);
+            setAppearance(normalizePlayerAppearance(serverPreferences));
             setVolume(serverPreferences.volume);
             setSubtitleScale(serverPreferences.subtitleScale);
             setSubtitleLineHeight(serverPreferences.subtitleLineHeight);
@@ -649,6 +650,7 @@ export function PlayerPanel({
     }
 
     const preferences = {
+      ...appearance,
       playbackRate,
       volume,
       subtitleScale,
@@ -675,6 +677,7 @@ export function PlayerPanel({
     }, 500);
     return () => window.clearTimeout(timeout);
   }, [
+    appearance,
     fullscreenAutoHideMs,
     hasLoadedPreferences,
     playbackRate,
@@ -731,7 +734,6 @@ export function PlayerPanel({
   }, [item?.id]);
 
   useEffect(() => {
-    setIsSubtitleDisplayOptionsOpen(false);
   }, [item?.id]);
 
   useEffect(() => {
@@ -739,6 +741,15 @@ export function PlayerPanel({
       setIsChapterListOpen(false);
     }
   }, [chapters.length]);
+
+  useEffect(() => {
+    const dialog = chapterDialogRef.current;
+    if (!dialog) return;
+    if (isChapterListOpen && chapters.length) {
+      setChapterPage(Math.max(0, Math.min(chapters.length - 5, activeChapterIndex - 2)));
+      if (!dialog.open) dialog.showModal();
+    } else if (dialog.open) dialog.close();
+  }, [isChapterListOpen, chapters.length]);
 
   useEffect(() => {
     if (!playerStatus) {
@@ -803,15 +814,6 @@ export function PlayerPanel({
     }
   });
 
-  const hideFullscreenControls = useEventCallback(() => {
-    if (!isFullscreen || !isPlaying || isChapterListOpen) {
-      return;
-    }
-
-    clearFullscreenControlsTimer();
-    setIsFullscreenControlsVisible(false);
-  });
-
   const revealFullscreenControls = useEventCallback((keepVisible = false) => {
     if (!isFullscreen) {
       return;
@@ -820,7 +822,7 @@ export function PlayerPanel({
     setIsFullscreenControlsVisible(true);
     clearFullscreenControlsTimer();
 
-    if (keepVisible || !isPlaying || isChapterListOpen) {
+    if (keepVisible || !isPlaying || isChapterListOpen || isOptionsOpen || isShortcutHelpOpen || panelRef.current?.querySelector(".sleep-timer-popover[open]")) {
       return;
     }
 
@@ -842,7 +844,7 @@ export function PlayerPanel({
     return () => {
       clearFullscreenControlsTimer();
     };
-  }, [clearFullscreenControlsTimer, isChapterListOpen, isFullscreen, isPlaying, revealFullscreenControls]);
+  }, [clearFullscreenControlsTimer, isChapterListOpen, isOptionsOpen, isShortcutHelpOpen, isFullscreen, isPlaying, revealFullscreenControls]);
 
   const exitFullscreenSafely = useEventCallback(async (target?: Element | null) => {
     const activeTarget = target ?? panelRef.current;
@@ -1377,6 +1379,9 @@ export function PlayerPanel({
     currentTimeRef.current = initialTime;
     lastSyncedTimeRef.current = initialTime;
     setCurrentTime(initialTime);
+    seekHistoryRef.current.clear();
+    setUndoTime(null);
+    setIsChapterListOpen(false);
     completionReachedRef.current = false;
 
     setSubtitleCues([]);
@@ -1663,17 +1668,29 @@ export function PlayerPanel({
   }
 
   function handleSeek(nextTime: number) {
-    queueTrackLoad(nextTime, Boolean(sessionRef.current) && isPlayingRef.current);
+    const next = clampTime(nextTime, totalDurationRef.current);
+    seekHistoryRef.current.remember(currentTimeRef.current, next);
+    setUndoTime(seekHistoryRef.current.target());
+    queueTrackLoad(next, Boolean(sessionRef.current) && isPlayingRef.current);
   }
 
   function handleRelativeSeek(delta: number) {
-    queueTrackLoad(currentTimeRef.current + delta, Boolean(sessionRef.current) && isPlayingRef.current);
+    seekHistoryRef.current.end();
+    handleSeek(currentTimeRef.current + delta);
   }
 
   function handleChapterJump(chapter: Chapter, index: number) {
-    queueTrackLoad(chapter.start, Boolean(sessionRef.current) && isPlayingRef.current);
+    seekHistoryRef.current.end();
+    handleSeek(chapter.start);
     setIsChapterListOpen(false);
     setPlayerStatus(`Jumped to ${getChapterTitle(chapter, index)}.`);
+  }
+
+  function undoLastJump() {
+    const target = seekHistoryRef.current.undo();
+    setUndoTime(null);
+    if (target !== null) queueTrackLoad(target, Boolean(sessionRef.current) && isPlayingRef.current);
+    revealFullscreenControls();
   }
 
   function handleChapterStep(direction: "previous" | "next") {
@@ -1824,18 +1841,8 @@ export function PlayerPanel({
     revealFullscreenControls();
   }
 
-  function handleSubtitleScaleChange(nextValue: SubtitleScale) {
-    setSubtitleScale(nextValue);
-    revealFullscreenControls(true);
-  }
-
   function handleSubtitleLineHeightChange(nextValue: SubtitleLineHeight) {
     setSubtitleLineHeight(nextValue);
-    revealFullscreenControls(true);
-  }
-
-  function handleSubtitlePositionChange(nextValue: SubtitlePosition) {
-    setSubtitlePosition(nextValue);
     revealFullscreenControls(true);
   }
 
@@ -1846,11 +1853,6 @@ export function PlayerPanel({
 
   function handleFullscreenAutoHideChange(nextValue: FullscreenAutoHide) {
     setFullscreenAutoHideMs(nextValue);
-    revealFullscreenControls(true);
-  }
-
-  function toggleSubtitleDisplayOptions() {
-    setIsSubtitleDisplayOptionsOpen((current) => !current);
     revealFullscreenControls(true);
   }
 
@@ -1866,11 +1868,6 @@ export function PlayerPanel({
     }
 
     if (target.closest(".transport-shell-fullscreen")) {
-      return;
-    }
-
-    if (shouldShowFullscreenControls && isPlaying && !isChapterListOpen) {
-      hideFullscreenControls();
       return;
     }
 
@@ -1922,6 +1919,7 @@ export function PlayerPanel({
       } else if (key === "f") {
         void toggleFullscreen();
       } else if (event.key === "?") {
+        setIsOptionsOpen(true);
         setIsShortcutHelpOpen((current) => !current);
       } else if (event.key === "Escape" && isShortcutHelpOpen) {
         setIsShortcutHelpOpen(false);
@@ -1943,58 +1941,14 @@ export function PlayerPanel({
   });
 
   function renderSubtitleTools() {
-    return (
-      <>
-        <div className="subtitle-tools-grid">
-          <label className="field">
-            <span>Audiobookshelf subtitles</span>
-            <select
-              disabled={!serverSubtitleFiles.length}
-              onChange={(event) => {
-                const nextFile = serverSubtitleFiles.find(
-                  (entry) => String(entry.ino) === event.target.value,
-                );
-
-                if (nextFile) {
-                  void loadServerSubtitle(nextFile);
-                }
-              }}
-              value={selectedServerSubtitleId}
-            >
-              {serverSubtitleFiles.length ? null : <option value="">No attached subtitle files</option>}
-              {serverSubtitleFiles.map((file) => (
-                <option key={String(file.ino)} value={String(file.ino)}>
-                  {getLibraryFileLabel(file)}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="field field-file">
-            <span>Upload .srt or .vtt file</span>
-            <input accept=".srt,.vtt,text/vtt" onChange={handleManualSubtitleUpload} ref={subtitleUploadRef} type="file" />
-          </label>
-
-          <label className="field">
-            <span>Subtitle offset</span>
-            <input
-              max={8}
-              min={-8}
-              onChange={(event) => setSubtitleOffset(Number(event.target.value))}
-              step={0.1}
-              type="range"
-              value={subtitleOffset}
-            />
-            <small>
-              {subtitleOffset >= 0 ? "+" : ""}
-              {subtitleOffset.toFixed(1)} seconds
-            </small>
-          </label>
-        </div>
-
-        <div className="subtitle-display-options-panel">{renderSubtitleDisplayOptions()}</div>
-      </>
-    );
+    return <>
+      <label className="player-option-row"><span>Timing offset</span><span className="player-option-input"><input aria-label="Subtitle timing offset" type="number" min={-8} max={8} step={0.1} value={subtitleOffset} onChange={event => setSubtitleOffset(Math.max(-8, Math.min(8, Number(event.target.value))))} /><span className="player-option-value">seconds</span></span></label>
+      <label className="player-option-row"><span>Subtitle file</span><select aria-label="Subtitle file" value={selectedServerSubtitleId} onChange={event => {
+        if (event.target.value === "upload") { subtitleUploadRef.current?.click(); return; }
+        const file = serverSubtitleFiles.find(entry => String(entry.ino) === event.target.value);
+        if (file) void loadServerSubtitle(file);
+      }}><option value="">{selectedServerSubtitleId ? "Choose subtitles" : subtitleSourceLabel}</option>{serverSubtitleFiles.map(file => <option key={String(file.ino)} value={String(file.ino)}>{getLibraryFileLabel(file)}</option>)}<option value="upload">Upload .srt or .vtt…</option></select></label>
+    </>;
   }
 
   function renderMetaGrid() {
@@ -2024,9 +1978,7 @@ export function PlayerPanel({
     const promptTitle = hasLoadedSubtitles
       ? "Press start to bring subtitles into view."
       : "Pick a subtitle file to turn on read-along mode.";
-    const promptBody = isFullscreen && !hasLoadedSubtitles
-      ? "No subtitle file is loaded yet. Exit full screen to choose an Audiobookshelf subtitle or upload your own .srt or .vtt file."
-      : hasLoadedSubtitles
+    const promptBody = hasLoadedSubtitles
         ? "Your subtitle file is ready. Start playback and the active line will appear here."
         : serverSubtitleFiles.length
           ? "We found subtitle files in Audiobookshelf, but none are loaded yet. Open subtitle options to choose one."
@@ -2039,7 +1991,7 @@ export function PlayerPanel({
           <p className="subtitle-prompt-copy">{promptBody}</p>
         </div>
 
-        {!isFullscreen ? (
+        {(
           <div className="subtitle-prompt-actions">
             <button
               className="button button-secondary"
@@ -2059,463 +2011,106 @@ export function PlayerPanel({
               </button>
             ) : null}
           </div>
-        ) : null}
+        )}
       </article>
     );
   }
 
   function renderSubtitleStage() {
-    return (
-      <section className="subtitle-stage" style={isFullscreen ? subtitleStageStyle : undefined}>
-        {!isDock && !isFullscreen ? <div className="subtitle-tools">{renderSubtitleTools()}</div> : null}
+    return <section className="subtitle-stage" style={subtitleStageStyle}>
+      <article ref={subtitleCardRef} className={`subtitle-card subtitle-card-contrast-${subtitleContrast} ${hasLoadedSubtitles ? "" : "subtitle-card-empty"}`}>
+        {hasLoadedSubtitles && !shouldShowLoadedSubtitlePrompt ? <div ref={subtitleLinesRef} className="subtitle-lines">
+          {appearance.showPreviousSubtitle ? <p className="subtitle-previous" aria-hidden="true">{previousSubtitleCue?.text || "\u00A0"}</p> : null}
+          <p aria-live="polite" aria-atomic="true" className="subtitle-active">{activeSubtitleText || "\u00A0"}</p>
+        </div> : renderSubtitlePrompt()}
+      </article>
+    </section>;
+  }
 
-        {shouldShowLyricsStage ? (
-          <article
-            className={`subtitle-card subtitle-card-contrast-${subtitleContrast} ${
-              isFullscreen ? `subtitle-card-position-${subtitlePosition}` : ""
-            } ${
-              hasLoadedSubtitles ? "" : "subtitle-card-empty"
-            }`.trim()}
-          >
-            {hasLoadedSubtitles && !shouldShowLoadedSubtitlePrompt ? (
-              <p aria-live="polite" aria-atomic="true" className="subtitle-active">
-                {activeSubtitleText || "\u00A0"}
-              </p>
-            ) : (
-              renderSubtitlePrompt()
-            )}
-          </article>
-        ) : (
-          renderSubtitlePrompt()
-        )}
-      </section>
-    );
+  function changeAppearance<K extends keyof PlayerAppearance>(key: K, value: PlayerAppearance[K]) {
+    setAppearance(current => ({ ...current, [key]: value }));
+    revealFullscreenControls(true);
   }
 
   function renderSubtitleDisplayOptions() {
-    return (
-      <section className="subtitle-display-options-grid" onClick={(event) => event.stopPropagation()}>
-        <label className="field field-compact">
-          <span>Subtitle size</span>
-          <select
-            onChange={(event) => handleSubtitleScaleChange(event.target.value as SubtitleScale)}
-            value={subtitleScale}
-          >
-            <option value="standard">Standard</option>
-            <option value="large">Large</option>
-            <option value="x-large">Extra large</option>
-          </select>
-        </label>
+    return <>
+      <p className="player-option-group-label">Subtitles</p>
+      <label className="player-option-row"><span>Font</span><select aria-label="Font" value={appearance.subtitleFont} onChange={event => changeAppearance("subtitleFont", event.target.value as PlayerAppearance["subtitleFont"])}><option value="default">Default</option><option value="georgia">Georgia</option><option value="verdana">Verdana</option><option value="trebuchet">Trebuchet MS</option><option value="times">Times New Roman</option></select></label>
+      <label className="player-option-row"><span>Horizontal alignment</span><select aria-label="Horizontal alignment" value={appearance.subtitleAlignment} onChange={event => changeAppearance("subtitleAlignment", event.target.value as PlayerAppearance["subtitleAlignment"])}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
+      <label className="player-option-row"><span>Vertical alignment</span><select aria-label="Vertical alignment" value={appearance.subtitleVerticalAlignment} onChange={event => changeAppearance("subtitleVerticalAlignment", event.target.value as PlayerAppearance["subtitleVerticalAlignment"])}><option value="top">Top</option><option value="middle">Middle</option><option value="bottom">Bottom</option></select></label>
+      <label className="player-option-row"><span>Fullscreen text size</span><select aria-label="Fullscreen text size" value={appearance.subtitleSizeMode} onChange={event => changeAppearance("subtitleSizeMode", event.target.value as PlayerAppearance["subtitleSizeMode"])}><option value="manual">Custom size</option><option value="fill">Fill screen</option></select></label>
+      <label className="player-option-row"><span>Text size</span><span className="player-option-input"><input aria-label="Subtitle text size" type="range" min={22} max={120} value={appearance.subtitleSize} onChange={event => changeAppearance("subtitleSize", Number(event.target.value))} /><span className="player-option-value">{appearance.subtitleSize}px</span></span></label>
+      <label className="player-option-row player-option-toggle"><span>Show previous line</span><input type="checkbox" checked={appearance.showPreviousSubtitle} onChange={event => changeAppearance("showPreviousSubtitle", event.target.checked)} /></label>
+    </>;
+  }
 
-        <label className="field field-compact">
-          <span>Line height</span>
-          <select
-            onChange={(event) => handleSubtitleLineHeightChange(event.target.value as SubtitleLineHeight)}
-            value={subtitleLineHeight}
-          >
-            <option value="tight">Tight</option>
-            <option value="standard">Standard</option>
-            <option value="relaxed">Relaxed</option>
-          </select>
-        </label>
-
-        <label className="field field-compact">
-          <span>Subtitle position</span>
-          <select
-            onChange={(event) => handleSubtitlePositionChange(event.target.value as SubtitlePosition)}
-            value={subtitlePosition}
-          >
-            <option value="center">Center</option>
-            <option value="raised">Raised</option>
-            <option value="lower-third">Lower third</option>
-          </select>
-        </label>
-
-        <label className="field field-compact">
-          <span>Contrast</span>
-          <select
-            onChange={(event) => handleSubtitleContrastChange(event.target.value as SubtitleContrast)}
-            value={subtitleContrast}
-          >
-            <option value="solid">Solid</option>
-            <option value="soft">Soft</option>
-            <option value="glow">Glow</option>
-          </select>
-        </label>
-
-        <label className="field field-compact">
-          <span>Hide controls</span>
-          <select
-            onChange={(event) =>
-              handleFullscreenAutoHideChange(Number(event.target.value) as FullscreenAutoHide)
-            }
-            value={fullscreenAutoHideMs}
-          >
-            <option value={1500}>1.5s</option>
-            <option value={2500}>2.5s</option>
-            <option value={4000}>4s</option>
-            <option value={6000}>6s</option>
-          </select>
-        </label>
-      </section>
-    );
+  function renderPlayerOptions() {
+    return <section className="player-options-panel" aria-label="Player options" onClick={event => event.stopPropagation()}>
+      <div className="player-options-heading"><h3>Player options</h3><button className="player-icon-control" aria-label="Close player options" type="button" onClick={() => setIsOptionsOpen(false)}><PlayerIcon name="close" /></button></div>
+      {renderSubtitleDisplayOptions()}{renderSubtitleTools()}
+      <label className="player-option-row player-option-background"><span>Fullscreen background</span><select aria-label="Fullscreen background" value={appearance.fullscreenBackground} onChange={event => changeAppearance("fullscreenBackground", event.target.value as PlayerAppearance["fullscreenBackground"])}><option value="default">Default</option><option value="black">Black</option><option value="custom">Custom color</option><option value="cover">Cover art</option></select></label>
+      {appearance.fullscreenBackground === "custom" ? <label className="player-option-row"><span>Custom color</span><span className="player-option-input"><input aria-label="Fullscreen custom color" type="color" value={appearance.fullscreenCustomColor} onChange={event => changeAppearance("fullscreenCustomColor", event.target.value)} /><span className="player-option-value">{appearance.fullscreenCustomColor.toUpperCase()}</span></span></label> : null}
+      <div className="player-option-actions">
+        <button type="button" disabled={busyAction === "syncing" || !hasActiveSession} onClick={() => void syncToAudiobookshelf("sync", { refreshItem: true })}><PlayerIcon name="sync" />Force sync</button>
+        <button type="button" disabled={busyAction === "refreshing"} onClick={() => void pullLatestServerProgress()}><PlayerIcon name="pull" />Pull server progress</button>
+        <button type="button" onClick={openPopout}><PlayerIcon name="popup" />Pop out player</button>
+        <button type="button" onClick={() => setIsShortcutHelpOpen(current => !current)}><PlayerIcon name="keyboard" />Keyboard shortcuts</button>
+      </div>
+      <details className="player-extra-options"><summary>More settings</summary>
+        <label className="player-option-row"><span>Line height</span><select aria-label="Line height" value={subtitleLineHeight} onChange={event => handleSubtitleLineHeightChange(event.target.value as SubtitleLineHeight)}><option value="tight">Tight</option><option value="standard">Standard</option><option value="relaxed">Relaxed</option></select></label>
+        <label className="player-option-row"><span>Contrast</span><select aria-label="Contrast" value={subtitleContrast} onChange={event => handleSubtitleContrastChange(event.target.value as SubtitleContrast)}><option value="solid">Solid</option><option value="soft">Soft</option><option value="glow">Glow</option></select></label>
+        <label className="player-option-row"><span>Auto-hide delay</span><select aria-label="Auto-hide delay" value={fullscreenAutoHideMs} onChange={event => handleFullscreenAutoHideChange(Number(event.target.value) as FullscreenAutoHide)}><option value={1500}>1.5s</option><option value={2500}>2.5s</option><option value={4000}>4s</option><option value={6000}>6s</option></select></label>
+        <button className="player-text-action" type="button" disabled={busyAction === "starting"} onClick={() => void startPlayback(true)}>Restart playback</button>
+      </details>
+      {isShortcutHelpOpen ? <section className="shortcut-help-panel" aria-label="Keyboard shortcuts"><p><kbd>Space</kbd>/<kbd>K</kbd> play or pause · <kbd>J</kbd>/<kbd>L</kbd> skip 10s</p><p><kbd>←</kbd>/<kbd>→</kbd> back 15s/forward 30s · <kbd>Shift</kbd> + arrows change chapter</p><p><kbd>M</kbd> mute · <kbd>F</kbd> full screen · <kbd>?</kbd> help</p></section> : null}
+    </section>;
   }
 
   function renderTransport() {
-    const primaryLabel = !session ? "Start playback" : isPlaying ? "Pause playback" : "Resume playback";
-    const fullscreenLabel = isFullscreen ? "Exit full screen" : "Enter full screen";
     const volumePercent = Math.round(volume * 100);
-    const timeModeLabel = timeDisplayMode === "remaining" ? "Show elapsed time" : "Show remaining time";
-    const timelineDisplay =
-      timeDisplayMode === "remaining"
-        ? `-${formatTime(Math.max(totalDuration - currentTime, 0))}`
-        : formatTime(currentTime);
-
-    return (
-      <section
-        className={`transport ${isFullscreen ? "transport-fullscreen" : ""}`.trim()}
-        onBlur={(event) => {
-          if (!isFullscreen) {
-            return;
-          }
-
-          const nextFocused = event.relatedTarget;
-
-          if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) {
-            return;
-          }
-
-          revealFullscreenControls();
-        }}
-        onFocus={() => {
-          if (isFullscreen) {
-            revealFullscreenControls(true);
-          }
-        }}
-      >
-        <div className="transport-topline">
-          <div className="transport-timeline">
-            <button
-              aria-label={timeModeLabel}
-              className="progress-pill progress-pill-button"
-              onClick={() =>
-                setTimeDisplayMode((current) => (current === "elapsed" ? "remaining" : "elapsed"))
-              }
-              title={timeModeLabel}
-              type="button"
-            >
-              <span>{timelineDisplay}</span>
-              <span>/</span>
-              <span>{formatTime(totalDuration)}</span>
-            </button>
-
-            {chapterLabel ? (
-              <button
-                aria-expanded={isChapterListOpen}
-                aria-haspopup="listbox"
-                className={`chapter-pill chapter-pill-button ${
-                  isChapterListOpen ? "chapter-pill-button-active" : ""
-                }`.trim()}
-                onClick={() => {
-                  setIsChapterListOpen((current) => !current);
-                  revealFullscreenControls(true);
-                }}
-                type="button"
-              >
-                {chapterLabel}
-              </button>
-            ) : null}
-          </div>
-
-          <div className="transport-settings">
-            <label className="speed-control">
-              <span>Speed</span>
-              <select
-                onChange={(event) => handlePlaybackRateChange(Number(event.target.value))}
-                value={playbackRate}
-              >
-                {[0.8, 1, 1.15, 1.25, 1.4, 1.5, 1.75, 2].map((speed) => (
-                  <option key={speed} value={speed}>
-                    {speed}x
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="volume-control">
-              <span>Volume</span>
-              <input
-                aria-label="Player volume"
-                className="volume-slider"
-                max={1}
-                min={0}
-                onChange={(event) => handleVolumeChange(Number(event.target.value))}
-                step={0.01}
-                style={{ "--volume-percent": `${volumePercent}%` } as CSSProperties}
-                type="range"
-                value={volume}
-              />
-              <output aria-live="off" className="volume-value">
-                {volumePercent}%
-              </output>
-            </label>
-
-            <details className="sleep-timer-popover">
-              <summary>
-                <span>Sleep timer</span>
-                <output aria-live="polite">
-                  {sleepTimer.selection === "off" ? "Off" : formatSleepTimer(sleepTimer.remainingSeconds)}
-                </output>
-              </summary>
-              <div aria-label="Sleep timer choices" className="sleep-timer-panel" role="group">
-                <div className="sleep-timer-options">
-                {([
-                  ["off", "Off"],
-                  [15, "15m"],
-                  [30, "30m"],
-                  [45, "45m"],
-                  [60, "60m"],
-                  ["chapter", "Chapter"],
-                ] as Array<[SleepTimerSelection, string]>).map(([value, label]) => (
-                  <button
-                    aria-pressed={sleepTimer.selection === value}
-                    className={`sleep-timer-option ${sleepTimer.selection === value ? "sleep-timer-option-active" : ""}`}
-                    disabled={value === "chapter" && !activeChapter}
-                    key={String(value)}
-                    onClick={(event) => {
-                      sleepTimer.setSelection(value);
-                      event.currentTarget.closest("details")?.removeAttribute("open");
-                    }}
-                    type="button"
-                  >
-                    {label}
-                  </button>
-                ))}
-                </div>
-                <p>Choose a duration or stop at the end of the current chapter.</p>
-              </div>
-            </details>
-          </div>
+    const fullscreenLabel = isFullscreen ? "Exit fullscreen" : "Enter fullscreen";
+    return <section ref={transportRef} className="transport reading-focus-transport" aria-label="Playback controls" onFocus={() => revealFullscreenControls(true)} onBlur={event => {
+      if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) revealFullscreenControls();
+    }}>
+      <div className="player-control-meta">
+        <div className="player-control-book"><img alt="" src={`/api/items/${item?.id}/cover`} /><div><strong>{item?.media.metadata.title}</strong><p>{item?.media.metadata.authorName ?? "Unknown author"}{item?.media.metadata.narratorName ? ` · ${item.media.metadata.narratorName}` : ""}</p></div></div>
+        <div className="player-volume-fullscreen"><label className="player-main-volume"><span>Volume</span><input aria-label="Player volume" type="range" min={0} max={1} step={0.01} value={volume} onChange={event => handleVolumeChange(Number(event.target.value))} /><output>{volumePercent}%</output></label><button type="button" className="player-icon-control" aria-label={fullscreenLabel} title={fullscreenLabel} onClick={() => void toggleFullscreen()}><PlayerIcon name={isFullscreen ? "exit" : "fullscreen"} /></button></div>
+      </div>
+      <div className="player-timeline">
+        <span className="player-time-label">{formatTime(currentTime)}</span>
+        <div className="player-timeline-track"><input aria-label={`Playback position, ${formatTime(currentTime)} of ${formatTime(totalDuration)}`} className="progress-slider" type="range" min={0} max={Math.max(totalDuration, 1)} step={0.1} value={Math.min(currentTime, Math.max(totalDuration, 1))}
+          onPointerDown={() => seekHistoryRef.current.begin(currentTimeRef.current)} onPointerUp={() => seekHistoryRef.current.end()} onPointerCancel={() => seekHistoryRef.current.end()} onBlur={() => seekHistoryRef.current.end()}
+          onKeyDown={event => { if (["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(event.key)) seekHistoryRef.current.begin(currentTimeRef.current); }} onKeyUp={() => seekHistoryRef.current.end()}
+          onChange={event => { handleSeek(Number(event.target.value)); revealFullscreenControls(); }} />
+          <div className="player-chapter-markers" aria-hidden="true">{timelineMarkers.map(marker => <span key={marker.index} style={{ left: `${marker.percent}%` }} title={getChapterTitle(chapters[marker.index]!, marker.index)} />)}</div>
         </div>
-
-        <input
-          aria-label={`Playback position, ${formatTime(currentTime)} of ${formatTime(totalDuration)}`}
-          className="progress-slider"
-          max={Math.max(totalDuration, 1)}
-          min={0}
-          onChange={(event) => {
-            handleSeek(Number(event.target.value));
-            revealFullscreenControls();
-          }}
-          step={0.1}
-          type="range"
-          value={Math.min(currentTime, Math.max(totalDuration, 1))}
-        />
-
-        <div className="transport-controls">
-          <div className="transport-controls-main">
-            <button
-              aria-label="Previous chapter"
-              className="icon-button transport-action-button transport-chapter-button"
-              disabled={!hasPreviousChapter}
-              onClick={() => {
-                handleChapterStep("previous");
-                revealFullscreenControls();
-              }}
-              title="Previous chapter"
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 20 20">
-                <path d="M6 4v12" />
-                <path d="M14 5l-6 5 6 5" />
-              </svg>
-            </button>
-
-            <button
-              aria-label="Back 15 seconds"
-              className="icon-button transport-action-button"
-              onClick={() => {
-                handleRelativeSeek(-15);
-                revealFullscreenControls();
-              }}
-              title="Back 15 seconds"
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 20 20">
-                <path d="M11 5l-5 5 5 5" />
-                <path d="M16 5l-5 5 5 5" />
-              </svg>
-            </button>
-
-            <button
-              aria-label={primaryLabel}
-              className="icon-button transport-action-button"
-              disabled={busyAction === "starting"}
-              onClick={() => {
-                void handlePrimaryTransport();
-                revealFullscreenControls(true);
-              }}
-              title={busyAction === "starting" ? "Starting playback" : primaryLabel}
-              type="button"
-            >
-              {isPlaying ? (
-                <svg aria-hidden="true" viewBox="0 0 20 20">
-                  <path d="M8 5v10" />
-                  <path d="M12 5v10" />
-                </svg>
-              ) : (
-                <svg aria-hidden="true" viewBox="0 0 20 20">
-                  <path d="M7 5.5l7 4.5-7 4.5z" />
-                </svg>
-              )}
-            </button>
-
-            <button
-              aria-label="Forward 30 seconds"
-              className="icon-button transport-action-button"
-              onClick={() => {
-                handleRelativeSeek(30);
-                revealFullscreenControls();
-              }}
-              title="Forward 30 seconds"
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 20 20">
-                <path d="M9 5l5 5-5 5" />
-                <path d="M4 5l5 5-5 5" />
-              </svg>
-            </button>
-
-            <button
-              aria-label="Next chapter"
-              className="icon-button transport-action-button transport-chapter-button"
-              disabled={!hasNextChapter}
-              onClick={() => {
-                handleChapterStep("next");
-                revealFullscreenControls();
-              }}
-              title="Next chapter"
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 20 20">
-                <path d="M14 4v12" />
-                <path d="M6 5l6 5-6 5" />
-              </svg>
-            </button>
-          </div>
-
-          <div className="transport-controls-side">
-            <button
-              aria-expanded={isShortcutHelpOpen}
-              aria-label="Keyboard shortcuts"
-              className="icon-button transport-action-button fullscreen-button"
-              onClick={() => setIsShortcutHelpOpen((current) => !current)}
-              title="Keyboard shortcuts (?)"
-              type="button"
-            >
-              ?
-            </button>
-            <button
-              aria-expanded={isSubtitleDisplayOptionsOpen}
-              aria-label="Subtitle display options"
-              className={`icon-button transport-action-button fullscreen-button ${
-                isSubtitleDisplayOptionsOpen ? "transport-action-button-active" : ""
-              }`.trim()}
-              onClick={() => toggleSubtitleDisplayOptions()}
-              title="Subtitle display options"
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 20 20">
-                <path d="M4 6h12" />
-                <path d="M4 10h12" />
-                <path d="M4 14h8" />
-                <circle cx="15.5" cy="14" r="1.5" />
-              </svg>
-            </button>
-
-            <button
-              aria-label="Pop out player"
-              className="icon-button transport-action-button fullscreen-button"
-              onClick={() => {
-                revealFullscreenControls(true);
-                openPopout();
-              }}
-              title="Pop out player"
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 20 20">
-                <path d="M11 4h5v5" />
-                <path d="M10 10l6-6" />
-                <path d="M8 4H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-3" />
-              </svg>
-            </button>
-
-            <button
-              aria-label={fullscreenLabel}
-              className="icon-button transport-action-button fullscreen-button"
-              onClick={() => {
-                revealFullscreenControls(true);
-                void toggleFullscreen();
-              }}
-              title={fullscreenLabel}
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 20 20">
-                <path d="M3 8V3h5" />
-                <path d="M12 3h5v5" />
-                <path d="M17 12v5h-5" />
-                <path d="M8 17H3v-5" />
-              </svg>
-            </button>
-          </div>
+        <button className="player-time-label player-time-toggle" type="button" onClick={() => setTimeDisplayMode(current => current === "remaining" ? "total" : "remaining")} aria-label={timeDisplayMode === "remaining" ? "Show total time" : "Show remaining time"} title={timeDisplayMode === "remaining" ? "Remaining time · click for total" : "Total time · click for remaining"}>{timeDisplayMode === "remaining" ? `−${formatTime(Math.max(totalDuration - currentTime, 0))}` : formatTime(totalDuration)}</button>
+      </div>
+      <div className="player-control-row">
+        <button className="player-chapter-trigger" type="button" disabled={!chapters.length} aria-haspopup="dialog" aria-expanded={isChapterListOpen} onClick={() => { setIsChapterListOpen(true); revealFullscreenControls(true); }}><PlayerIcon name="chapters" /><span>{activeChapter ? getChapterTitle(activeChapter, activeChapterIndex) : "Chapters"}</span><PlayerIcon name="right" /></button>
+        <div className="player-main-controls">
+          <button className="player-icon-control player-skip-control" type="button" aria-label="Back 15 seconds" title="Back 15 seconds" onClick={() => handleRelativeSeek(-15)}><PlayerIcon name="back" /><span>15</span></button>
+          <button className="player-play-control" type="button" disabled={busyAction === "starting"} aria-label={busyAction === "starting" ? "Starting playback" : isPlaying ? "Pause playback" : "Resume playback"} onClick={() => { void handlePrimaryTransport(); revealFullscreenControls(); }}><PlayerIcon name={isPlaying ? "pause" : "play"} /></button>
+          <button className="player-icon-control player-skip-control" type="button" aria-label="Forward 30 seconds" title="Forward 30 seconds" onClick={() => handleRelativeSeek(30)}><PlayerIcon name="forward" /><span>30</span></button>
         </div>
-
-        {isSubtitleDisplayOptionsOpen ? (
-          <section className="transport-subpanel">
-            {renderSubtitleDisplayOptions()}
-          </section>
-        ) : null}
-
-        {isShortcutHelpOpen ? (
-          <section aria-label="Keyboard shortcuts" className="transport-subpanel shortcut-help-panel">
-            <p><kbd>Space</kbd>/<kbd>K</kbd> play or pause · <kbd>J</kbd>/<kbd>L</kbd> back/forward 10s</p>
-            <p><kbd>←</kbd>/<kbd>→</kbd> back 15s/forward 30s · <kbd>Shift</kbd> + arrows change chapter</p>
-            <p><kbd>M</kbd> mute · <kbd>F</kbd> full screen · <kbd>?</kbd> toggle this help</p>
-          </section>
-        ) : null}
-
-        {isChapterListOpen && chapters.length ? (
-          <section className="chapter-picker">
-            <div className="chapter-list" role="list">
-              {chapters.map((chapter, index) => {
-                const isActiveChapter = index === activeChapterIndex;
-
-                return (
-                  <button
-                    aria-current={isActiveChapter ? "true" : undefined}
-                    className={`chapter-option ${isActiveChapter ? "chapter-option-active" : ""}`.trim()}
-                    key={chapter.id ?? `${chapter.start}-${chapter.end}-${index}`}
-                    onClick={() => {
-                      handleChapterJump(chapter, index);
-                      revealFullscreenControls();
-                    }}
-                    type="button"
-                  >
-                    <span className="chapter-option-title">{getChapterTitle(chapter, index)}</span>
-                    <span className="chapter-option-meta">{formatTime(chapter.start)}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
-
-        <div className="transport-meta">
-          <span>{item?.media.metadata.title ?? "Waiting for audiobook"}</span>
-          <span>{Math.round(progressValue * 100)}% complete</span>
+        <div className="player-secondary-controls">
+          <select className="player-speed-select" aria-label="Playback speed" value={playbackRate} onChange={event => handlePlaybackRateChange(Number(event.target.value))}>{[0.8, 1, 1.15, 1.25, 1.4, 1.5, 1.75, 2].map(speed => <option key={speed} value={speed}>{speed}×</option>)}</select>
+          <details className="sleep-timer-popover" onToggle={event => { if (event.currentTarget.open) revealFullscreenControls(true); else revealFullscreenControls(); }}><summary aria-label="Sleep timer"><PlayerIcon name="moon" /><output>{sleepTimer.selection === "off" ? "Off" : formatSleepTimer(sleepTimer.remainingSeconds)}</output></summary><div className="sleep-timer-panel" aria-label="Sleep timer choices"><div className="sleep-timer-options">{([["off", "Off"], [15, "15m"], [30, "30m"], [45, "45m"], [60, "60m"], ["chapter", "Chapter"]] as Array<[SleepTimerSelection, string]>).map(([value, label]) => <button key={String(value)} type="button" disabled={value === "chapter" && !activeChapter} aria-pressed={sleepTimer.selection === value} className={`sleep-timer-option ${sleepTimer.selection === value ? "sleep-timer-option-active" : ""}`} onClick={event => { sleepTimer.setSelection(value); event.currentTarget.closest("details")?.removeAttribute("open"); }}>{label}</button>)}</div></div></details>
+          <button className="player-icon-control" type="button" aria-label={undoTime === null ? "Undo last jump" : `Undo jump to return to ${formatTime(undoTime)}`} title={undoTime === null ? "Undo last jump" : `Return to ${formatTime(undoTime)}`} disabled={undoTime === null} onClick={undoLastJump}><PlayerIcon name="undo" /></button>
+          <button className="player-icon-control" type="button" aria-label="Player options" aria-expanded={isOptionsOpen} onClick={() => { setIsOptionsOpen(current => !current); revealFullscreenControls(true); }}><PlayerIcon name="options" /></button>
         </div>
-      </section>
-    );
+      </div>
+      {isOptionsOpen ? renderPlayerOptions() : null}
+      {isFullscreen ? renderFooterMeta() : null}
+    </section>;
+  }
+
+  function renderChapterDialog() {
+    return <dialog className="player-chapter-dialog" ref={chapterDialogRef} aria-label="Choose a chapter" onCancel={() => setIsChapterListOpen(false)} onClose={() => setIsChapterListOpen(false)} onClick={event => { if (event.target === event.currentTarget) setIsChapterListOpen(false); }}>
+      <div className="player-chapter-dialog-body"><header><h3>Chapters <small>{chapters.length} chapters</small></h3><button className="player-icon-control" type="button" aria-label="Close chapter list" onClick={() => setIsChapterListOpen(false)}><PlayerIcon name="close" /></button></header>
+      <div className="player-chapter-dialog-list">{chapters.slice(chapterPage, chapterPage + 5).map((chapter, localIndex) => { const index = chapterPage + localIndex; return <button key={chapter.id ?? index} className="player-chapter-choice" type="button" aria-current={index === activeChapterIndex ? "true" : undefined} onClick={() => handleChapterJump(chapter, index)}><span>{index + 1}</span><span>{getChapterTitle(chapter, index)}</span><time>{formatTime(chapter.start)}</time></button>; })}</div>
+      <footer><button type="button" disabled={chapterPage === 0} onClick={() => setChapterPage(page => Math.max(0, page - 5))}><PlayerIcon name="left" />Previous</button><button type="button" disabled={chapterPage + 5 >= chapters.length} onClick={() => setChapterPage(page => Math.min(Math.max(0, chapters.length - 5), page + 5))}>Next<PlayerIcon name="right" /></button></footer></div>
+    </dialog>;
   }
 
   function renderFooterMeta() {
@@ -2559,46 +2154,6 @@ export function PlayerPanel({
     );
   }
 
-  function renderActionButtons() {
-    return (
-      <div className="player-actions">
-        <button
-          className="button button-secondary"
-          disabled={busyAction === "starting"}
-          onClick={() => {
-            void startPlayback(true);
-          }}
-          type="button"
-        >
-          Restart synced playback
-        </button>
-
-        <button
-          className="button button-secondary"
-          disabled={busyAction === "refreshing"}
-          onClick={() => {
-            void pullLatestServerProgress();
-          }}
-          type="button"
-        >
-          Pull latest server progress
-        </button>
-
-        <button
-          className="button button-secondary"
-          disabled={busyAction === "syncing" || !hasActiveSession}
-          onClick={() => {
-            void syncToAudiobookshelf("sync", { refreshItem: true });
-          }}
-          type="button"
-        >
-          Force sync to Audiobookshelf
-        </button>
-
-      </div>
-    );
-  }
-
   if (!item) {
     return (
       <section className="empty-player">
@@ -2610,6 +2165,7 @@ export function PlayerPanel({
   return (
     <section
       ref={panelRef}
+      style={isFullscreen ? ({ "--fullscreen-player-bg": appearance.fullscreenBackground === "black" ? "#000" : appearance.fullscreenBackground === "custom" ? appearance.fullscreenCustomColor : "var(--fullscreen-bg)", "--fullscreen-subtitle-ink": appearance.fullscreenBackground === "custom" && useDarkSubtitleText(appearance.fullscreenCustomColor) ? "#1b1016" : "#f4eeee", "--fullscreen-subtitle-muted": appearance.fullscreenBackground === "custom" && useDarkSubtitleText(appearance.fullscreenCustomColor) ? "#4a303b" : "#baaab0" }) as CSSProperties : undefined}
       className={`player-panel ${isDock ? "player-panel-dock" : "player-panel-full"} ${
         focusMode ? "player-panel-focus" : ""
       } ${isBrowserFullscreen ? "player-panel-fullscreen" : ""} ${
@@ -2628,6 +2184,7 @@ export function PlayerPanel({
         }
       }}
     >
+      {isFullscreen && appearance.fullscreenBackground === "cover" ? <div className="player-cover-background" aria-hidden="true"><img alt="" src={`/api/items/${item.id}/cover`} /></div> : null}
       <audio
         onEnded={handleEnded}
         onLoadedMetadata={handleLoadedMetadata}
@@ -2637,6 +2194,7 @@ export function PlayerPanel({
         preload="metadata"
         ref={audioRef}
       />
+      <input hidden accept=".srt,.vtt,text/vtt" onChange={handleManualSubtitleUpload} ref={subtitleUploadRef} type="file" />
 
       {!isFullscreen && focusMode ? (
         <header className="focus-mode-header">
@@ -2690,6 +2248,7 @@ export function PlayerPanel({
 
           <div
             aria-hidden={!shouldShowFullscreenControls}
+            inert={!shouldShowFullscreenControls}
             className={`transport-shell-fullscreen ${
               shouldShowFullscreenControls ? "transport-shell-visible" : "transport-shell-hidden"
             }`.trim()}
@@ -2706,26 +2265,7 @@ export function PlayerPanel({
       )}
       {!isFullscreen ? renderFooterMeta() : null}
 
-      {isDock && !isFullscreen ? (
-        <details
-          className="player-options-drawer"
-          onToggle={(event) => setIsOptionsOpen(event.currentTarget.open)}
-          open={isOptionsOpen}
-        >
-          <summary>Player options</summary>
-
-          <div className="player-options-body">
-            <p className="player-options-meta">
-              Subtitle source, force sync, and pop out controls live here when the dock is collapsed.
-            </p>
-            {renderSubtitleTools()}
-            {renderMetaGrid()}
-            {renderActionButtons()}
-          </div>
-        </details>
-      ) : !isFullscreen ? (
-        renderActionButtons()
-      ) : null}
+      {renderChapterDialog()}
     </section>
   );
 }
