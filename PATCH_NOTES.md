@@ -1,5 +1,17 @@
 # Spoken Page patch notes
 
+## v1.4.0 — October 9, 2026
+
+- Match library and fullscreen player controls, with volume, mute/restore, playback speed and a clickable sleep timer.
+- Show current and previous subtitles on a black library player background, without revealing upcoming text. Keep fullscreen metadata with the automatically hiding controls.
+- Add subtitle fonts, horizontal and vertical alignment, text sizes up to 120px, and a Fill screen option that fits subtitles to the available fullscreen area.
+- Offer default, black, custom-color and cover-art fullscreen backgrounds through compact player options.
+- Add chapter timeline markers and a themed chapter popup, stable time labels, remaining/total time switching and undo for seeks or chapter jumps.
+- Click subtitles to play/pause or double-click to enter/leave fullscreen. Prevent subtitle and sleep timer text selection.
+- Apply saved volume before playback starts, including when book details load after player preferences.
+- Keep routine library and progress-sync status text quiet while retaining error feedback.
+- Display v1.4.0 in the app version pill and use the Spoken Page logo as the browser tab icon.
+
 ## v1.3.0 — October 1, 2026
 
 - Restore account-scoped library selection, search, sorting, listening status and filters on a fresh visit. Explicit URL options take precedence; browser history remains usable.

@@ -1,15 +1,17 @@
 # Spoken Page
 
-![Version](https://img.shields.io/badge/version-v1.3.0-ff5664?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-v1.4.0-ff5664?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-163434?style=for-the-badge)
 
 ![Spoken Page logo](public/spoken-page-logo-trimmed.png)
 
 Spoken Page is a responsive, subtitle-first web player for [Audiobookshelf](https://github.com/advplyr/audiobookshelf). It keeps Audiobookshelf as the source of truth while adding a focused library and listening experience for desktop, tablet, and installable PWA use.
 
-## What v1.3 adds
+## What v1.4 adds
 
-Version 1.3 includes complete-library search, Audiobookshelf-derived listening status with a separate Want to listen preference, remembered library views, improved series handling and clearer progress-save feedback. See [the library upgrades review](docs/LIBRARY_UPGRADES_REVIEW.md) and [initial validation report](docs/PHASE_0_2_REPORT.md). Offline downloads and player redesign are excluded from this release.
+Version 1.4 adds matching library and fullscreen player controls, customizable subtitle fonts and alignment, fullscreen backgrounds, larger text and a Fill screen option. Chapter markers, a chapter popup, seek undo, remembered volume and subtitle click shortcuts make playback easier to navigate. The Spoken Page logo now appears in browser tabs.
+
+The release also retains complete-library search, Audiobookshelf-derived listening status, Want to listen preferences, remembered library views and series handling from v1.3. See [the library upgrades review](docs/LIBRARY_UPGRADES_REVIEW.md) and [initial validation report](docs/PHASE_0_2_REPORT.md). Offline downloads remain outside this release.
 
 - A responsive cover gallery with a black and dark red theme
 - Compact Pinned books that sync with your account and carry forward existing saved books
